@@ -16,7 +16,7 @@ object DbpediaDgraphSparkApp {
     if (args.length < 2 || args.length > 3) {
       println()
       println("Please provide path to dbpedia dataset, the release and optionally languages (two-letters code, comma separated)")
-      println("The set of languages can be a subset of the languages given to SbpediaToParquetSparkApp")
+      println("The set of languages can be a subset of the languages given to DbpediaToParquetSparkApp")
       System.exit(1)
     }
 
@@ -26,6 +26,7 @@ object DbpediaDgraphSparkApp {
     val languages = if (args.length == 3) args(2).split(",").toSeq else getLanguages(base, release, dataset)
     val externaliseUris = true
     val removeLanguageTags = false
+    val topInfoboxPropertiesPerLang = None  // set to None to get all infobox properties, or Some(100) to get top 100 infobox properties
 
     println(s"Pre-processing release $release of $dataset")
     println(s"Pre-processing these languages: ${languages.mkString(", ")}")
@@ -33,6 +34,8 @@ object DbpediaDgraphSparkApp {
       println("URIs will be externalized")
     if (removeLanguageTags)
       println("Language tags will be removed from string literals")
+    if (topInfoboxPropertiesPerLang.isDefined)
+      println(s"Will take only the ${topInfoboxPropertiesPerLang.get} largest infobox properties per language")
 
     val start = System.nanoTime()
 
@@ -44,7 +47,7 @@ object DbpediaDgraphSparkApp {
         .appName("Spark Dgraph DBpedia App")
         .config("spark.local.dir", ".")
         .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.ui.showConsoleProgress", "true")
+        .config("spark.ui.showConsoleProgress", "false")
         .getOrCreate()
     import spark.implicits._
 
@@ -54,17 +57,35 @@ object DbpediaDgraphSparkApp {
 
     // load files from parquet, only these datasets are pre-processed
     val labelTriples = readParquet(s"$base/$release/$dataset/labels.parquet").where($"lang".isin(languages: _*))
-    val infoboxTriples = readParquet(s"$base/$release/$dataset/infobox_properties.parquet").where($"lang".isin(languages: _*))
+    val allInfoboxTriples = readParquet(s"$base/$release/$dataset/infobox_properties.parquet").where($"lang".isin(languages: _*))
     val interlangTriples = readParquet(s"$base/$release/$dataset/interlanguage_links.parquet").where($"lang".isin(languages: _*))
     val categoryTriples = readParquet(s"$base/$release/$dataset/article_categories.parquet").where($"lang".isin(languages: _*))
+    val infoboxTriples = topInfoboxPropertiesPerLang.foldLeft(allInfoboxTriples){ case (triples, topk) =>
+      // get the top-k most frequent properties per language
+      val topkProperties =
+        triples
+          .groupBy($"p", $"lang").count()
+          .withColumn("k", row_number() over Window.partitionBy($"lang").orderBy($"count".desc))
+          .where($"k" <= topk)
+          .select($"p", $"lang")
+
+      // filter triples for top-k most frequent properties per language
+      triples
+        .join(topkProperties, Seq("p", "lang"), "left_semi")
+        .as[Triple]
+    }
 
     // print some stats, they are not too costly to print
-    Seq(
+    val stats = Seq(
       "labels" -> labelTriples,
-      "infoboxe_properties" -> infoboxTriples,
+      "infobox_properties" -> allInfoboxTriples,
       "interlanguage_links" -> interlangTriples,
       "article_categories" -> categoryTriples
-    ).foreach { case (label, df) =>
+    ) ++ topInfoboxPropertiesPerLang.map(topK =>
+      Seq(s"top $topK infobox_properties" -> infoboxTriples)
+    ).getOrElse(Seq.empty[(String, DataFrame)])
+
+    stats.foreach { case (label, df) =>
       println(s"$label: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
     }
 

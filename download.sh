@@ -2,7 +2,7 @@
 
 RELEASE=2016-10
 DATASET=core-i18n
-LANGS="en fr de ru es nl it pt pl ja zh"
+LANGS="ar az be bg bn ca cs cy de el en eo es eu fr ga gl hi hr hu hy id it ja ko lv mk nl pl pt ro ru sk sl sr sv tr uk vi zh"
 FILENAMES="labels infobox_properties interlanguage_links article_categories"
 EXT=.ttl.bz2
 

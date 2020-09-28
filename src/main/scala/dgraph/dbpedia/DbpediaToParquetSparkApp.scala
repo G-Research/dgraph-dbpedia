@@ -1,4 +1,6 @@
-package dev.minack.enrico.dgraph.dbpedia
+package dgraph.dbpedia
+
+import java.io.File
 
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{Dataset, SaveMode, SparkSession}
@@ -10,18 +12,19 @@ object DbpediaToParquetSparkApp {
     println("This tool writes all language datasets into a single parquet file.")
     println("From there, Spark can load the data much more quicker, as well as easier load subsets of the languages.")
 
-    if (args.length < 3 || args.length > 5) {
+    if (args.length < 2 || args.length > 4) {
       println()
-      println("Please provide path to dbpedia dataset, the release and languages (two-letters code, comma separated)")
-      println("Optionally provide the dataset (defaults to: core-i18n) and a comma separated list of datasets (defaults to: labels,infobox_properties,interlanguage_links,article_categories)")
+      println("Please provide path to dbpedia dataset and the release")
+      println("Optionally prov the languages (two-letters code, comma separated) and a comma separated list of datasets")
+      println("defaults to: labels,infobox_properties,interlanguage_links,article_categories")
       System.exit(1)
     }
 
     val base = args(0)
     val release = args(1)
-    val languages = args(2).split(",")
-    val dataset = if (args.length == 4) args(3) else "core-i18n"
-    val filenames = if (args.length == 5) args(4).split(",").toSeq else Seq("labels", "infobox_properties", "interlanguage_links", "article_categories")
+    val dataset = "core-i18n"
+    val languages = if (args.length >= 3) args(2).split(",").toSeq else getLanguages(base, release, dataset)
+    val filenames = if (args.length == 4) args(3).split(",").toSeq else Seq("labels", "infobox_properties", "interlanguage_links", "article_categories")
     val extension = ".ttl"
 
     val start = System.nanoTime()
@@ -65,6 +68,13 @@ object DbpediaToParquetSparkApp {
     val duration = (System.nanoTime() - start) / 1000000000
     println(s"finished in ${duration / 3600}h ${(duration / 60) % 60}m ${duration % 60}s")
   }
+
+  def getLanguages(base: String, release: String, dataset: String): Seq[String] =
+    new File(new File(new File(base), release), dataset)
+      .listFiles().toSeq
+      .filter(_.isDirectory)
+      .map(_.getName)
+      .filter(_.length == 2)
 
   def readTtl(path: String*)(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._

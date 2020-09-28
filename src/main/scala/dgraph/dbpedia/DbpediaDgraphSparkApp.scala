@@ -1,11 +1,13 @@
-package dev.minack.enrico.dgraph.dbpedia
+package dgraph.dbpedia
 
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
+import dgraph.dbpedia.Helpers.ConditionalDataFrame
+import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, Dataset, SaveMode, SparkSession}
-import Helpers.ConditionalDataFrame
 
 object DbpediaDgraphSparkApp {
 
@@ -24,9 +26,11 @@ object DbpediaDgraphSparkApp {
     val release = args(1)
     val dataset = "core-i18n"
     val languages = if (args.length == 3) args(2).split(",").toSeq else getLanguages(base, release, dataset)
-    val externaliseUris = true
+    val externaliseUris = false
     val removeLanguageTags = false
-    val topInfoboxPropertiesPerLang = None  // set to None to get all infobox properties, or Some(100) to get top 100 infobox properties
+    // set to None to get all infobox properties, or Some(100) to get top 100 infobox properties
+    val topInfoboxPropertiesPerLang = Some(100)
+    val printStats = true
 
     println(s"Pre-processing release $release of $dataset")
     println(s"Pre-processing these languages: ${languages.mkString(", ")}")
@@ -36,6 +40,7 @@ object DbpediaDgraphSparkApp {
       println("Language tags will be removed from string literals")
     if (topInfoboxPropertiesPerLang.isDefined)
       println(s"Will take only the ${topInfoboxPropertiesPerLang.get} largest infobox properties per language")
+    println()
 
     val start = System.nanoTime()
 
@@ -51,6 +56,19 @@ object DbpediaDgraphSparkApp {
         .getOrCreate()
     import spark.implicits._
 
+    val memSpilled = new AtomicLong()
+    val diskSpilled = new AtomicLong()
+    val peakMem = new AtomicLong()
+    val listener = new SparkListener {
+      override def onStageCompleted(stageCompleted: SparkListenerStageCompleted): Unit = {
+        val metrics = stageCompleted.stageInfo.taskMetrics
+        memSpilled.addAndGet(metrics.memoryBytesSpilled)
+        diskSpilled.addAndGet(metrics.diskBytesSpilled)
+        peakMem.getAndUpdate((l: Long) => math.max(l, metrics.peakExecutionMemory / stageCompleted.stageInfo.numTasks))
+      }
+    }
+    spark.sparkContext.addSparkListener(listener)
+
     // defines some useful column functions
     val blank = (c: String) => concat(lit("_:"), md5(col(c))).as(c)
     val removeLangTag = regexp_replace(col("o"), "@[a-z]+$", "").as("o")
@@ -65,9 +83,10 @@ object DbpediaDgraphSparkApp {
       val topkProperties =
         triples
           .groupBy($"p", $"lang").count()
-          .withColumn("k", row_number() over Window.partitionBy($"lang").orderBy($"count".desc))
+          .withColumn("k", row_number() over Window.partitionBy($"lang").orderBy($"count".desc, $"p"))
           .where($"k" <= topk)
           .select($"p", $"lang")
+          .cache()
 
       // filter triples for top-k most frequent properties per language
       triples
@@ -75,18 +94,25 @@ object DbpediaDgraphSparkApp {
         .as[Triple]
     }
 
-    // print some stats, they are not too costly to print
-    val stats = Seq(
-      "labels" -> labelTriples,
-      "infobox_properties" -> allInfoboxTriples,
-      "interlanguage_links" -> interlangTriples,
-      "article_categories" -> categoryTriples
-    ) ++ topInfoboxPropertiesPerLang.map(topK =>
-      Seq(s"top $topK infobox_properties" -> infoboxTriples)
-    ).getOrElse(Seq.empty[(String, DataFrame)])
+    // print some stats
+    if (printStats) {
+      val stats = Seq(
+        "labels" -> labelTriples,
+        "infobox_properties" -> allInfoboxTriples,
+        "interlanguage_links" -> interlangTriples,
+        "article_categories" -> categoryTriples
+      ) ++ topInfoboxPropertiesPerLang.map(topK =>
+        Seq(s"top $topK infobox_properties" -> infoboxTriples)
+      ).getOrElse(Seq.empty[(String, DataFrame)])
+      println()
 
-    stats.foreach { case (label, df) =>
-      println(s"$label: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
+      import spark.implicits._
+      val langStats = stats.map { case (label, df) =>
+        println(s"$label: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
+        df.groupBy($"lang").count.withColumnRenamed("count", label)
+      }.foldLeft(Seq.empty[String].toDF("lang")) { case (f, df) => f.join(df, Seq("lang"), "full_outer") }
+      langStats.show(100, false)
+      println()
     }
 
     // define labels without language tag (if removeLanguageTags is true)
@@ -117,9 +143,10 @@ object DbpediaDgraphSparkApp {
     val infoboxPropertyDataType =
       infoboxTriplesWithDataType
         .groupBy($"p", $"t").count()
-        .withColumn("freq", row_number() over Window.partitionBy($"p").orderBy($"count".desc))
-        .where($"freq" === 1)
+        .withColumn("k", row_number() over Window.partitionBy($"p").orderBy($"count".desc, $"t"))
+        .where($"k" === 1)
         .select($"p", $"t")
+        .cache()
 
     // infobox properties with most frequent data type per property
     val infobox =
@@ -153,11 +180,12 @@ object DbpediaDgraphSparkApp {
 
     // mapping to Dgraph types
     val dgraphDataTypes = Map(
-      "<uri>" -> "uid",
+      "<uri>" -> "[uid]",
       "<http://www.w3.org/2001/XMLSchema#date>" -> "datetime",
       "<http://www.w3.org/2001/XMLSchema#double>" -> "float",
       "<http://www.w3.org/2001/XMLSchema#integer>" -> "int",
       "<http://www.w3.org/2001/XMLSchema#string>" -> "string",
+//      "<http://www.w3.org/2001/XMLSchema#string>" -> (if (removeLanguageTags) "string" else "string @lang"),
     )
     // this is deterministic, but marking it non-deterministic guarantees it is executed only once per row
     val dgraphDataTypesUdf = udf(dgraphDataTypes(_)).asNondeterministic()
@@ -165,28 +193,35 @@ object DbpediaDgraphSparkApp {
     // mapping to Dgraph indices
     val dgraphIndices = Map(
       "uid" -> "@reverse",
+      "[uid]" -> "@reverse",
       "datetime" -> "@index(day)",
       "float" -> "@index(float)",
       "int" -> "@index(int)",
-      "string" -> (if(removeLanguageTags) "@index(fulltext)" else "@lang @index(fulltext)"),
+      "string" -> "@index(fulltext)",
+//      "string @lang" -> "@index(fulltext)",
     )
     val dgraphIndicesUdf = udf(dgraphIndices(_)).asNondeterministic()
 
     // get all predicates from the datasets
+    val lang = if (removeLanguageTags) "" else " @lang"
     val predicates =
       Seq(
-        labelTriples.select($"p", lit("any").as("lang"), lit("string").as("t"), lit("@index(fulltext)").as("i")),
+        labelTriples.select($"p", lit("any").as("lang"), lit(s"string${lang}").as("t"), lit("@index(fulltext)").as("i")),
         infoboxTriples.join(infoboxPropertyDataType, "p").withColumn("t", dgraphDataTypesUdf($"t")).select($"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i")),
-        interlangTriples.select($"p", lit("any").as("lang"), lit("uid").as("t"), lit("@reverse").as("i")),
-        categoryTriples.select($"p", lit("any").as("lang"), lit("uid").as("t"), lit("@reverse").as("i")),
+        interlangTriples.select($"p", lit("any").as("lang"), lit("[uid]").as("t"), lit("@reverse").as("i")),
+        categoryTriples.select($"p", lit("any").as("lang"), lit("[uid]").as("t"), lit("@reverse").as("i")),
       ).reduce(_.unionByName(_))
         .distinct()
         .optionally(externaliseUris, _.unionByName(xid))
         .sort()
+        .cache()
         .coalesce(1)
 
     // write schema without indices
+    println("writing schema.dgraph")
     predicates
+      // @ and ~ not allowed in predicates in Dgraph
+      .where(!$"p".contains("@") && !$"p".contains("~"))
       .select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"lang")
       .write
       .partitionBy("lang")
@@ -194,7 +229,10 @@ object DbpediaDgraphSparkApp {
       .text(s"$base/$release/$dataset/schema.dgraph")
 
     // write schema with indices
+    println("writing schema.indexed.dgraph")
     predicates
+      // @ and ~ not allowed in predicates in Dgraph
+      .where(!$"p".contains("@") && !$"p".contains("~"))
       .select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"lang")
       .write
       .partitionBy("lang")
@@ -234,11 +272,12 @@ object DbpediaDgraphSparkApp {
         interlangTriples.select($"o".as("s"), $"lang").where($"o".substr(9, 2).isin(langs: _*)),
         categoryTriples.select($"s", $"lang"),
         categoryTriples.select($"o".as("s"), $"lang")
-      ).reduce(_.unionByName(_))
+      )
+        .map(_.distinct())
+        .reduce(_.unionByName(_))
         .distinct()
-        .optionally(externaliseUris, _.withColumn("s", blank("s")))
         .select(
-          $"s",
+          blank("s"),
           lit("<xid>").as("p"),
           concat(lit("\""), $"s".substr(lit(2), length($"s")-2), lit("\"")).as("o"),
           $"lang"
@@ -250,10 +289,13 @@ object DbpediaDgraphSparkApp {
     writeRdf(interlang.toDF, s"$base/$release/$dataset/interlanguage_links.rdf")
     writeRdf(categories.toDF, s"$base/$release/$dataset/article_categories.rdf")
     writeRdf(types.toDF, s"$base/$release/$dataset/types.rdf")
-    writeRdf(externalIds.toDF, s"$base/$release/$dataset/external_ids.rdf")
+    if (externaliseUris)
+      writeRdf(externalIds.toDF, s"$base/$release/$dataset/external_ids.rdf")
+    println()
 
     val infoboxRdf = spark.read.text(s"$base/$release/$dataset/infobox_properties.rdf")
     println(s"cleaned-up infoboxes cover ${infoboxRdf.count() * 100 / infoboxTriples.count()}% of original rows")
+    println(s"memory spill: ${memSpilled.get() / 1024/1024/1024} GB  disk spill: ${diskSpilled.get() / 1024/1024/1024} GB  peak mem per host: ${peakMem.get() / 1024/1024} MB")
     val duration = (System.nanoTime() - start) / 1000000000
     println(s"finished in ${duration / 3600}h ${(duration / 60) % 60}m ${duration % 60}s")
   }
@@ -262,8 +304,11 @@ object DbpediaDgraphSparkApp {
     new File(new File(new File(base), release), dataset)
       .listFiles().toSeq
       .filter(_.isDirectory)
-      .map(_.getName)
-      .filter(_.length == 2)
+      .filter(_.getName.endsWith(".parquet"))
+      .flatMap(_.listFiles())
+      .filter(f => f.isDirectory && f.getName.startsWith("lang="))
+      .map(_.getName.substring(5))
+      .distinct
 
   def readParquet(path: String)(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._
@@ -272,6 +317,9 @@ object DbpediaDgraphSparkApp {
 
   def writeRdf(df: DataFrame, path: String)(implicit spark: SparkSession): Unit = {
     import spark.implicits._
+
+    println(s"writing $path")
+
     // @ and ~ not allowed in predicates in Dgraph
     df.where(!$"p".contains("@") && !$"p".contains("~"))
       // with this range partition and sort you get fewer partitions

@@ -3,11 +3,11 @@ package dgraph.dbpedia
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
-import dgraph.dbpedia.Helpers.ConditionalDataFrame
+import dgraph.dbpedia.Helpers.{ConditionalDataFrame, PartitionedDataFrame}
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.{DataFrame, Dataset, SaveMode, SparkSession}
+import org.apache.spark.sql.{Column, DataFrame, DataFrameReader, DataFrameWriter, Dataset, Row, SaveMode, SparkSession}
 
 object DbpediaDgraphSparkApp {
 
@@ -118,8 +118,8 @@ object DbpediaDgraphSparkApp {
     // define labels without language tag (if removeLanguageTags is true)
     val labels =
       labelTriples
-        .optionally(externaliseUris, _.withColumn("s", blank("s")))
-        .optionally(removeLanguageTags, _.withColumn("o", removeLangTag))
+        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
+        .conditionally(removeLanguageTags, _.withColumn("o", removeLangTag))
 
     // all datatypes other than these will be interpreted as <http://www.w3.org/2001/XMLSchema#string>
     val supportedDataTypes = Seq(
@@ -151,11 +151,11 @@ object DbpediaDgraphSparkApp {
     // infobox properties with most frequent data type per property
     val infobox =
       infoboxTriplesWithDataType
-        .join(infoboxPropertyDataType, Seq("p", "t"))
-        // negative years not supported by dgraph load
+        .join(infoboxPropertyDataType, Seq("p", "t"), "semi_join")
+        // negative years not supported by Dgraph
         .where($"t" =!= "<http://www.w3.org/2001/XMLSchema#date>" || !$"v".startsWith("\"-"))
-        .optionally(externaliseUris, _.withColumn("s", blank("s")))
-        .optionally(externaliseUris, _.withColumn("v", when($"t" === "<uri>", blank("v")).otherwise(col("v"))))
+        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
+        .conditionally(externaliseUris, _.withColumn("v", when($"t" === "<uri>", blank("v")).otherwise(col("v"))))
         .select($"s", $"p", when($"t" === "<uri>", $"v").otherwise(concat($"v", lit("^^"), $"t")).as("o"), $"lang")
 
     // interlanguage links preprocessing
@@ -166,14 +166,14 @@ object DbpediaDgraphSparkApp {
     val interlang =
       interlangTriples
         .where($"o".substr(9, 2).isin(langs: _*))
-        .optionally(externaliseUris, _.withColumn("s", blank("s")))
-        .optionally(externaliseUris, _.withColumn("o", blank("o")))
+        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
+        .conditionally(externaliseUris, _.withColumn("o", blank("o")))
 
     // article_categories
     val categories =
       categoryTriples
-        .optionally(externaliseUris, _.withColumn("s", blank("s")))
-        .optionally(externaliseUris, _.withColumn("o", blank("o")))
+        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
+        .conditionally(externaliseUris, _.withColumn("o", blank("o")))
 
     // xid predicate
     val xid = Seq(("<xid>", "any", "string", "@index(exact)")).toDF("p", "lang", "t", "i")
@@ -202,17 +202,25 @@ object DbpediaDgraphSparkApp {
     )
     val dgraphIndicesUdf = udf(dgraphIndices(_)).asNondeterministic()
 
-    // get all predicates from the datasets
+    // helper variable in case we are removing language tags
     val lang = if (removeLanguageTags) "" else " @lang"
+
+    // define all predicates from our four datasets
+    // for each dataset we provide: `p`: the predicate, `lang`: its language, `t`: its Dgraph data type, `i`: indices
     val predicates =
       Seq(
+        // labels are always strings with fulltext index
         labelTriples.select($"p", lit("any").as("lang"), lit(s"string${lang}").as("t"), lit("@index(fulltext)").as("i")),
+        // infobox properties data type and index depends on their data type `t`
         infoboxTriples.join(infoboxPropertyDataType, "p").withColumn("t", dgraphDataTypesUdf($"t")).select($"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i")),
+        // interlanguage links are always uri lists with reverse index
         interlangTriples.select($"p", lit("any").as("lang"), lit("[uid]").as("t"), lit("@reverse").as("i")),
+        // categories are always uri lists with reverse index
         categoryTriples.select($"p", lit("any").as("lang"), lit("[uid]").as("t"), lit("@reverse").as("i")),
       ).reduce(_.unionByName(_))
+        // we are only interested in one line per predicate
         .distinct()
-        .optionally(externaliseUris, _.unionByName(xid))
+        .conditionally(externaliseUris, _.unionByName(xid))
         .sort()
         .cache()
         .coalesce(1)
@@ -222,9 +230,9 @@ object DbpediaDgraphSparkApp {
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"lang")
-      .write
-      .partitionBy("lang")
+      .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
+        Some(Seq(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"lang"))
+      )
       .mode(SaveMode.Overwrite)
       .text(s"$base/$release/$dataset/schema.dgraph")
 
@@ -233,9 +241,9 @@ object DbpediaDgraphSparkApp {
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"lang")
-      .write
-      .partitionBy("lang")
+      .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
+        Some(Seq(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"lang"))
+      )
       .mode(SaveMode.Overwrite)
       .text(s"$base/$release/$dataset/schema.indexed.dgraph")
 
@@ -250,13 +258,13 @@ object DbpediaDgraphSparkApp {
       )
         .map(_.distinct())
         .reduce(_.unionByName(_))
-        .optionally(externaliseUris, _.withColumn("s", blank("s")))
+        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
         .withColumn("p", lit("<dgraph.type>"))
         .withColumn("o", lit("\"Article\""))
     val categoryTypes =
       categoryTriples
         .select($"o".as("s"), $"lang").distinct()
-        .optionally(externaliseUris, _.withColumn("s", blank("s")))
+        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
         .withColumn("p", lit("<dgraph.type>"))
         .withColumn("o", lit("\"Category\""))
     val types =
@@ -320,18 +328,24 @@ object DbpediaDgraphSparkApp {
 
     println(s"writing $path")
 
-    // @ and ~ not allowed in predicates in Dgraph
-    df.where(!$"p".contains("@") && !$"p".contains("~"))
-      // with this range partition and sort you get fewer partitions
-      // for smaller languages and order within your partitions
-      .repartitionByRange($"lang", $"p", $"s")
-      .sort("lang", "p", "s", "o")
-      .select(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang")
-      .write
+    df
+      // @ and ~ not allowed in predicates in Dgraph
+      .where(!$"p".contains("@") && !$"p".contains("~"))
+      // with this partitioning you get few partition files for small languages and more files for large languages
+      // partition files are mostly even sized
+      // partition files will be sorted by all given columns
+      .writePartitionedBy(
+        Seq("lang"),    // there is a lang=… sub-directory in `path` for each language
+        Seq("p", "s"),  // all rows for one predicate and subject are contained in a single part-… file
+        Seq("o"),       // a part-… file in the sub-directories are sorted by `p`, `s` and `o`
+        // we don't want all columns of `df` to be stored in `path` but these columns
+        Some(Seq(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang"))
+      )
+      // gzip the partitions
       .option("compression", "gzip")
+      // overwrite `path` completely, if it exists
       .mode(SaveMode.Overwrite)
-      // this partitioning allows you to read in a subset of languages efficiently
-      .partitionBy("lang")
+      // write as text to `path`
       .text(path)
   }
 
@@ -344,17 +358,6 @@ object DbpediaDgraphSparkApp {
     } else {
       Array(value)
     }
-  }
-
-}
-
-case class Triple(s: String, p: String, o: String)
-
-object Helpers {
-
-  implicit class ConditionalDataFrame[T](df: Dataset[T]) {
-    def optionally(condition: Boolean, method: DataFrame => DataFrame): DataFrame =
-      if (condition) method(df.toDF) else df.toDF
   }
 
 }

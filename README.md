@@ -5,7 +5,7 @@ for loading into [Dgraph](https://dgraph.io/). This comprises the steps
 [download](#download-dbpedia), [extraction](#extract-dbpedia), [pre-processing](#pre-processing)
 and [bulk loading](#run-dgraph-bulk-loader).
 The first two steps can be done with provided shell scripts.
-The third step by using [Apache Spark](https://spark.apache.org) transformations.
+The third step by using [Apache Spark transformations](SPARK.md).
 The last step uses the [Dgraph Bulk Loader](https://dgraph.io/docs/deploy/fast-data-loading/#bulk-loader).
 
 ## Download DBpedia

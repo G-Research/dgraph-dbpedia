@@ -2,6 +2,7 @@ package dgraph.dbpedia
 
 import java.io.File
 
+import dgraph.dbpedia.Helpers.PartitionedDataFrame
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{Dataset, SaveMode, SparkSession}
 
@@ -42,27 +43,34 @@ object DbpediaToParquetSparkApp {
     // turn all supported files into parquet
     val dfs = filenames.map { filename =>
       val parquet = s"$base/$release/$dataset/${filename}.parquet"
+
+      // for each langage, read the ttl file and add the `lang` column
       languages.map(lang =>
         readTtl(s"$base/$release/$dataset/$lang/${filename}_$lang$extension")
           .withColumn("lang", lit(lang))
       )
+        // union all ttl files
         .reduce(_.unionByName(_))
-        // with this range partition and sort you get fewer partitions
-        // for smaller languages and order within your partitions
-        .repartitionByRange($"lang", $"s")
-        .sort("lang", "s", "p", "o")
-        .write
+        // write all data partitioned by language `lang` and sorted by `s`, `p` and `o`
+        // with this partitioning you get few partition files for small languages and more files for large languages
+        // partition files are mostly even sized
+        // partition files will be sorted by all given columns
+        .writePartitionedBy(
+          Seq("lang"),   // there is a lang=… sub-directory in `path` for each language
+          Seq("s"),      // all rows for one subject is contained in a single part-… file
+          Seq("p", "o")  // the part-… files are sorted by `s`, `p` and `o`
+        )
         .mode(SaveMode.Overwrite)
-        // this partitioning allows you to read in a subset of languages efficiently
-        .partitionBy("lang")
         .parquet(parquet)
 
+      // read from parquet file to print some stats
       val df = spark.read.parquet(parquet)
       println(s"$filename: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
       df
     }
-
     println()
+
+    // print overall statistics
     val df = dfs.reduce(_.union(_))
     println(s"all: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
     val duration = (System.nanoTime() - start) / 1000000000
@@ -76,14 +84,20 @@ object DbpediaToParquetSparkApp {
       .map(_.getName)
       .filter(_.length == 2)
 
-  def readTtl(path: String*)(implicit spark: SparkSession): Dataset[Triple] = {
+  def readTtl(paths: String*)(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._
 
-    val lines = spark.read.textFile(path: _*)
-    lines
+    spark
+      // read the ttl file as a text file
+      .read.textFile(paths: _*)
+      // ignore lines that start with #
       .where(!$"value".startsWith("#"))
+      // remove the last two characters (' .') from the ttl lines
+      // and split at the first two spaces (three columns: subject, predicate, object)
       .map(line => line.dropRight(2).split(" ", 3))
+      // get the three columns `s`, `p` and `o`
       .select($"value"(0).as("s"), $"value"(1).as("p"), $"value"(2).as("o"))
+      // type the DataFrame as Dataset[Triple]
       .as[Triple]
   }
 

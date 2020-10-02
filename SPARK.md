@@ -208,7 +208,7 @@ We can now filter the infobox triples `DataFrame` for these predicates and types
       infoboxTriplesWithDataType
 
         // filter with most-frequent type of each predicate
-        .join(infoboxPropertyDataType, Seq("p", "t"), "semi_join")
+        .join(infoboxPropertyDataType, Seq("p", "t"), "left_semi")
 
 
 ## Most Frequent Infobox Predicates
@@ -348,16 +348,63 @@ We can write the schema now once with indices:
 
 ## Writing RDF files
 
-## Scala Spark helpers
+    triples
+      .select(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang")
+      .write
+      .partitionBy("lang")
+      .option("compression", "gzip")
+      .mode(SaveMode.Overwrite)
+      .text(path)
+
+## Scala Spark Helpers
+
+Above example code was taken from https://github.com/EnricoMi/dgraph-dbpedia.
+That code has been simplified to focus on the respective problem and to better exemplify the solution.
+The following helper methods are used in above project to simplify code and increase code reuse.
 
 ### Conditional Transformation
+
+The Spark `DataFrame` API allows for chaining transformations as in the following example:
+
+    df.where($"id" === 1)
+      .withColumn("state", lit("new"))
+      .orderBy($"timestamp")
+
+If you want to perform any of the transformations only if a condition is true,
+then your you have to break that chaining and the code becomes harder to read:
+
+    val condition = true
+
+    val filteredDf = df.where($"id" === 1)
+    val condDf = if (condition) df.withColumn("state", lit("new")) else df
+    val result = df.orderBy($"timestamp")
+
+With the following implicit class you can conditionally call transformations:
 
     implicit class ConditionalDataFrame[T](df: Dataset[T]) {
       def conditionally(condition: Boolean, method: DataFrame => DataFrame): DataFrame =
         if (condition) method(df.toDF) else df.toDF
     }
 
+    val condition = true
+
+    val result =
+      df.where($"id" === 1)
+        .conditionally(condition, _.withColumn("state", lit("new")))
+        .orderBy($"timestamp")
+
+With an `Option`, this could look like:
+
+    val state: Option[String] = Some("new")
+
+    val result =
+      df.where($"id" === 1)
+        .conditionally(state.isDefined, _.withColumn("state", lit(state.get)))
+        .orderBy($"timestamp")
+
 ### Even-sized Partitions for variable-sized Languages
+
+Spark splits `DataFrame`s into partitions to be able to scale out.
    
     implicit class PartitionedDataFrame[T](df: Dataset[T]) {
       // with this range partition and sort you get fewer partitions

@@ -3,7 +3,7 @@ package dgraph.dbpedia
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
-import dgraph.dbpedia.Helpers.{ConditionalDataFrame, PartitionedDataFrame}
+import dgraph.dbpedia.Helpers.ExtendedDataFrame
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
@@ -118,8 +118,8 @@ object DbpediaDgraphSparkApp {
     // define labels without language tag (if removeLanguageTags is true)
     val labels =
       labelTriples
-        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
-        .conditionally(removeLanguageTags, _.withColumn("o", removeLangTag))
+        .when(externaliseUris).call(_.withColumn("s", blank("s")))
+        .when(removeLanguageTags).call(_.withColumn("o", removeLangTag))
 
     // all datatypes other than these will be interpreted as <http://www.w3.org/2001/XMLSchema#string>
     val supportedDataTypes = Seq(
@@ -151,11 +151,11 @@ object DbpediaDgraphSparkApp {
     // infobox properties with most frequent data type per property
     val infobox =
       infoboxTriplesWithDataType
-        .join(infoboxPropertyDataType, Seq("p", "t"), "semi_join")
+        .join(infoboxPropertyDataType, Seq("p", "t"), "left_semi")
         // negative years not supported by Dgraph
         .where($"t" =!= "<http://www.w3.org/2001/XMLSchema#date>" || !$"v".startsWith("\"-"))
-        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
-        .conditionally(externaliseUris, _.withColumn("v", when($"t" === "<uri>", blank("v")).otherwise(col("v"))))
+        .when(externaliseUris).call(_.withColumn("s", blank("s")))
+        .when(externaliseUris).call(_.withColumn("v", when($"t" === "<uri>", blank("v")).otherwise(col("v"))))
         .select($"s", $"p", when($"t" === "<uri>", $"v").otherwise(concat($"v", lit("^^"), $"t")).as("o"), $"lang")
 
     // interlanguage links preprocessing
@@ -166,14 +166,14 @@ object DbpediaDgraphSparkApp {
     val interlang =
       interlangTriples
         .where($"o".substr(9, 2).isin(langs: _*))
-        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
-        .conditionally(externaliseUris, _.withColumn("o", blank("o")))
+        .when(externaliseUris).call(_.withColumn("s", blank("s")))
+        .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
     // article_categories
     val categories =
       categoryTriples
-        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
-        .conditionally(externaliseUris, _.withColumn("o", blank("o")))
+        .when(externaliseUris).call(_.withColumn("s", blank("s")))
+        .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
     // xid predicate
     val xid = Seq(("<xid>", "any", "string", "@index(exact)")).toDF("p", "lang", "t", "i")
@@ -220,7 +220,7 @@ object DbpediaDgraphSparkApp {
       ).reduce(_.unionByName(_))
         // we are only interested in one line per predicate
         .distinct()
-        .conditionally(externaliseUris, _.unionByName(xid))
+        .when(externaliseUris).call(_.unionByName(xid))
         .sort()
         .cache()
         .coalesce(1)
@@ -231,7 +231,7 @@ object DbpediaDgraphSparkApp {
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
       .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
-        Some(Seq(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"lang"))
+        _.select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"lang")
       )
       .mode(SaveMode.Overwrite)
       .text(s"$base/$release/$dataset/schema.dgraph")
@@ -242,7 +242,7 @@ object DbpediaDgraphSparkApp {
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
       .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
-        Some(Seq(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"lang"))
+        _.select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"lang")
       )
       .mode(SaveMode.Overwrite)
       .text(s"$base/$release/$dataset/schema.indexed.dgraph")
@@ -258,13 +258,13 @@ object DbpediaDgraphSparkApp {
       )
         .map(_.distinct())
         .reduce(_.unionByName(_))
-        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
+        .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .withColumn("p", lit("<dgraph.type>"))
         .withColumn("o", lit("\"Article\""))
     val categoryTypes =
       categoryTriples
         .select($"o".as("s"), $"lang").distinct()
-        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
+        .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .withColumn("p", lit("<dgraph.type>"))
         .withColumn("o", lit("\"Category\""))
     val types =
@@ -336,10 +336,10 @@ object DbpediaDgraphSparkApp {
       // partition files will be sorted by all given columns
       .writePartitionedBy(
         Seq("lang"),    // there is a lang=… sub-directory in `path` for each language
-        Seq("p", "s"),  // all rows for one predicate and subject are contained in a single part-… file
-        Seq("o"),       // a part-… file in the sub-directories are sorted by `p`, `s` and `o`
-        // we don't want all columns of `df` to be stored in `path` but these columns
-        Some(Seq(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang"))
+        Seq("p", "s"),  // all rows for one predicate and subject are contained in a one part-… file
+        Seq("o"),       // the part-… files in the sub-directories are sorted by `p`, `s` and `o`
+        // we don't want all columns of `df` to be stored in `path`, only these columns
+        _.select(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang")
       )
       // gzip the partitions
       .option("compression", "gzip")

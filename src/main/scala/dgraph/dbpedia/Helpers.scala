@@ -1,29 +1,85 @@
 package dgraph.dbpedia
 
-import org.apache.spark.sql.{Column, DataFrame, DataFrameWriter, Dataset, Row}
 import org.apache.spark.sql.functions.col
+import org.apache.spark.sql.{DataFrame, DataFrameWriter, Dataset, Row}
 
 object Helpers {
 
-  implicit class ConditionalDataFrame[T](df: Dataset[T]) {
-    def conditionally(condition: Boolean, method: DataFrame => DataFrame): DataFrame =
-      if (condition) method(df.toDF) else df.toDF
+  trait WhenDataFrame {
+    def call(transformation: DataFrame => DataFrame): DataFrame
   }
 
-  implicit class PartitionedDataFrame[T](df: Dataset[T]) {
-    // with this range partition and sort you get fewer partitions
-    // for smaller languages and order within your partitions
-    // the partitionBy allows you to read in a subset of languages efficiently
-    def writePartitionedBy(hadoopPartitions: Seq[String],
-                           fileIds: Seq[String],
-                           fileOrder: Seq[String] = Seq.empty,
-                           projection: Option[Seq[Column]] = None): DataFrameWriter[Row] = {
+  case class ThenDataFrame[T](df: Dataset[T]) extends WhenDataFrame {
+    override def call(transformation: DataFrame => DataFrame): DataFrame = df.call(transformation)
+  }
+
+  case class OtherwiseDataFrame[T](df: Dataset[T]) extends WhenDataFrame {
+    override def call(transformation: DataFrame => DataFrame): DataFrame = df.toDF
+  }
+
+  implicit class ExtendedDataFrame[T](df: Dataset[T]) {
+
+    /**
+     * Executes the given transformation on the Dataset / DataFrame.
+     *
+     * @param transformation transformation
+     * @return DataFrame after calling the transformation
+     */
+    def call(transformation: DataFrame => DataFrame): DataFrame = transformation(df.toDF)
+
+    /**
+     * Allows to perform a transformation on the Dataset / DataFrame if the given condition is true:
+     *
+     * {{{
+     *   df.when(true).call(_.dropColumn("col"))
+     * }}}
+     *
+     * @param condition condition
+     * @return WhenDataFrame
+     */
+    def when(condition: Boolean): WhenDataFrame =
+      if (condition) ThenDataFrame(df) else OtherwiseDataFrame(df)
+
+    /**
+     * Writes the Dataset / DataFrame via DataFrameWriter.partitionBy. In addition to partitionBy,
+     * this method sorts the data to improve partition file size. Small partitions will contain few
+     * files, large partitions contain more files. Partition ids are contained in a single partition
+     * file per `partitionBy` partition only. Rows within the partition files are also sorted,
+     * if partitionOrder is defined.
+     *
+     * Calling:
+     * {{{
+     *   df.writePartitionedBy(Seq("a"), Seq("b"), Seq("c"), _.select(concat($"b", $"c")))
+     * }}}
+
+     * is equivalent to:
+     * {{{
+     *   df.repartitionByRange($"a", $"b")
+     *     .sortWithinPartitions($"a", $"b", $"c")
+     *     .select(concat($"b", $"c"))
+     *     .write
+     *     .partitionBy("a")
+     * }}}
+     *
+     * @param partitionBy columns used for partitioning
+     * @param partitionIds columns where individual values are written to a single file
+     * @param partitionOrder additional columns to sort partition files
+     * @param transformation additional transformation to be applied before calling write
+     * @return configured DataFrameWriter
+     */
+    def writePartitionedBy(partitionBy: Seq[String],
+                           partitionIds: Seq[String],
+                           partitionOrder: Seq[String] = Seq.empty,
+                           transformation: DataFrame => DataFrame = identity): DataFrameWriter[Row] = {
       df
-        .repartitionByRange((hadoopPartitions ++ fileIds).map(col): _*)
-        .sortWithinPartitions((hadoopPartitions ++ fileIds ++ fileOrder).map(col): _*)
-        .conditionally(projection.isDefined, _.select(projection.get: _*))
+        // with this range partition and sort you get fewer partitions
+        // for smaller languages and order within your partitions
+        .repartitionByRange((partitionBy ++ partitionIds).map(col): _*)
+        .sortWithinPartitions((partitionBy ++ partitionIds ++ partitionOrder).map(col): _*)
+        .call(transformation)
         .write
-        .partitionBy(hadoopPartitions: _*)
+        // the partitionBy allows you to read in a subset of languages efficiently
+        .partitionBy(partitionBy: _*)
     }
   }
 

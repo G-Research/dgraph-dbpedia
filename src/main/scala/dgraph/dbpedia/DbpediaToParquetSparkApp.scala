@@ -2,7 +2,7 @@ package dgraph.dbpedia
 
 import java.io.File
 
-import dgraph.dbpedia.Helpers.PartitionedDataFrame
+import dgraph.dbpedia.Helpers.ExtendedDataFrame
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{Dataset, SaveMode, SparkSession}
 

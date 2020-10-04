@@ -8,6 +8,43 @@ The first two steps can be done with provided shell scripts.
 The third step by using [Apache Spark transformations](SPARK.md).
 The last step uses the [Dgraph Bulk Loader](https://dgraph.io/docs/deploy/fast-data-loading/#bulk-loader).
 
+## A large real-world dataset
+I was looking for a large real-world graph dataset to load into a Dgraph cluster to ultimately test
+my [dgraph-spark-connector](https://github.com/G-Research/spark-dgraph-connector).
+Dgraph organizes the graph around predicates, so that dataset should contain predicates with a few characteristics:
+
+- numerous predicates, to have a large real-world schema
+- a predicate with a lot of data, ideally a long string that exists for every node
+- a long-tail predicate frequency distribution: a few predicates have high frequency (and low selectivity), most predicates have low frequency (and high selectivity)
+- predicates that, if they exist for a node:
+  - have a single occurrence (single value)
+  - have a multiple occurrences (value list)
+- real-world predicate names in multiple languages
+- various data types and strings in multiple languages
+
+A dataset that checks all these boxes can be found at the [DBpedia project](https://wiki.dbpedia.org/).
+They extract structured information from the [Wikipedia project](https://wikipedia.org/) and provide them in RDF format.
+However, that RDF data requires some preparation before it can be loaded into Dgraph.
+Given the size of the datasets, a scalable pre-processing step is required.
+
+This project uses [Apache Spark](https://spark.apache.org/) to bring real-work graph data into a Dgraph-compatible shape.
+[Read the detailed tutorial on the pre-processing steps](SPARK.md).
+
+## Datasets
+
+This tutorial uses the following datasets from [DBpedia project](https://wiki.dbpedia.org/):
+
+|dataset             |filename                        |description|
+|--------------------|--------------------------------|-----------|
+|labels              |`labels_{lang}.ttl`             |Each article has a single title in the article's language.|
+|category            |`article_categories_{lang}.ttl` |Some articles link to categories, multiple categories allowed.|
+|inter-language links|`interlanguage_links_{lang}.ttl`|Articles link to the same article in all other languages.|
+|infobox             |`infobox_properties_{lang}.ttl` |Some articles have infoboxes. This are key-value tables that provide structured information.|
+
+The `infobox` dataset provides real-world user-generated multi-language predicates.
+The other datasets provide a single predicate each.
+
+
 ## Download DBpedia
 
 Use the `download.sh` script to download the datasets and languages that you want to load into Dgraph:

@@ -231,6 +231,8 @@ object DbpediaDgraphSparkApp {
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
       .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
+        // turn columns into schema line: "$p: $t $i .",
+        // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
         _.select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"lang")
       )
       .mode(SaveMode.Overwrite)
@@ -242,6 +244,8 @@ object DbpediaDgraphSparkApp {
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
       .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
+        // turn columns into schema line: "$p: $t $i .",
+        // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
         _.select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"lang")
       )
       .mode(SaveMode.Overwrite)

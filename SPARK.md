@@ -1,52 +1,17 @@
 # Graph Pre-processing with SPARK
 
-This project uses [Apache Spark](https://spark.apache.org/) to bring real-work graph data into a Dgraph-compatible shape.
-
-## A large real-world dataset 
-I was looking for a large real-world graph dataset to load into a Dgraph cluster to ultimately test
-my [dgraph-spark-connector](https://github.com/G-Research/spark-dgraph-connector).
-Dgraph organizes the graph around predicates, so that dataset should contain predicates with a few characteristics:
-
-- numerous predicates, to have a large real-world schema
-- a predicate with a lot of data, ideally a long string that exists for every node
-- a long-tail predicate frequency distribution: a few predicates have high frequency (and low selectivity), most predicates have low frequency (and high selectivity)
-- predicates that, if they exist for a node:
-  - have a single occurrence (single value)
-  - have a multiple occurrences (value list)
-- real-world predicate names in multiple languages
-- various data types and strings in multiple languages
-
-A good dataset that checks all these boxes can be found at the [DBpedia project](https://wiki.dbpedia.org/).
-They extract structured information from the [Wikipedia project](https://wikipedia.org/) and provides them in RDF format.
-However, that RDF data requires some preparation before it can be loaded into Dgraph.
-Given the size of the datasets, a scalable pre-processing step is required.
-
-This article outlines this pre-processing done with [Apache Spark](https://spark.apache.org/).
+This article outlines the pre-processing done with [Apache Spark](https://spark.apache.org/).
 Spark is a big data processing platform that splits row-based data into smaller partitions,
 distributes them across a cluster to transforms your data.
-
-## Datasets
-
-This tutorial uses the following datasets from [DBpedia project](https://wiki.dbpedia.org/):
-
-|dataset             |filename                        |description|
-|--------------------|--------------------------------|-----------|
-|labels              |`labels_{lang}.ttl`             |Each article has a single title in the article's language.|
-|category            |`article_categories_{lang}.ttl` |Some articles link to categories, multiple categories allowed.|
-|inter-language links|`interlanguage_links_{lang}.ttl`|Articles link to the same article in all other languages.|
-|infobox             |`infobox_properties_{lang}.ttl` |Some articles have infoboxes. This are key-value tables that provide structured information.|
-
-The `infobox` dataset provides real-world user-generated multi-language predicates.
-The other datasets provide a single predicate each.
 
 ## Datasets Preparations
 
 We will see the following transformations and cleanups to get to a Dgraph-compatible dataset:
 
 - [Read](#reading-ttl-files) and [write](#writing-rdf-files) `.ttl` files
-- [Extract infobox data types](#extract-data-types)
-- [Disambiguate infobox data types](#disambiguate-infobox-data-types)
-- [Take most frequent infobox predicates](#most-frequent-infobox-predicates)
+- [Extract predicate data types](#extract-data-types)
+- [Disambiguate predicate data types](#disambiguate-infobox-data-types)
+- [Take most frequent predicates](#most-frequent-infobox-predicates)
 - [General data cleanup](#general-data-cleanup)
 - [Generate Dgraph schema](#generate-dgraph-schema)
 
@@ -116,6 +81,15 @@ We now read each language file, add a `lang` column and union all together to a 
       )
         // union all ttl files
         .reduce(_.unionByName(_))
+
+The unioned `DataFrame` looks like this then:
+
+|s                                            |p                                       |o                                                                                |lang|
+|---------------------------------------------|----------------------------------------|---------------------------------------------------------------------------------|----|
+|<http://dbpedia.org/resource/A>              |<http://dbpedia.org/property/name>      |"Latin Capital Letter A"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString>|en  |
+|<http://de.dbpedia.org/resource/Alan_Smithee>|<http://de.dbpedia.org/property/typ>    |"p"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString>                     |de  |
+|<http://vi.dbpedia.org/resource/Internet_Society>|<http://vi.dbpedia.org/property/tên>|"Internet Society"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#langString>      |vi  |
+
 
 ## Extract Data Types
 
@@ -247,6 +221,8 @@ across the languages.
         // filter triples for top-k most frequent properties per language
         .join(topkProperties, Seq("p", "lang"), "left_semi")
 
+This clean-up removes ~10% of infobox triples.
+
 ## General data cleanup
 
 The `infobox` dataset contains predicates and values that are not supported by Dgraph.
@@ -263,14 +239,29 @@ Those triples need to be filtered out:
 ## Generate Dgraph schema
 
 Before we can load the triples into Dgraph, we need to define a schema that contains all
-predicates. This can be generated from our datasets:
+predicates. This can be generated from our datasets.
+
+We first define the indices that we want for each Dgraph data type:
+
+    // mapping to Dgraph indices
+    val dgraphIndices = Map(
+      "uid" -> "@reverse",
+      "[uid]" -> "@reverse",
+      "datetime" -> "@index(day)",
+      "float" -> "@index(float)",
+      "int" -> "@index(int)",
+      "string" -> "@index(fulltext)",
+    )
+    val dgraphIndicesUdf = udf(dgraphIndices(_)).asNondeterministic()
+
+Now we can generate a Dgraph schema line from each predicate that exists in our datasets:
 
     // define all predicates from our four datasets
     // for each dataset we provide: `p`: the predicate, `lang`: its language, `t`: its Dgraph data type, `i`: indices
     val predicates =
       Seq(
         // labels are always strings with fulltext index
-        labelTriples.select($"p", lit("any").as("lang"), lit(s"string${lang}").as("t"), lit("@index(fulltext)").as("i")),
+        labelTriples.select($"p", lit("any").as("lang"), lit(s"string").as("t"), lit("@index(fulltext)").as("i")),
 
         // infobox properties data type and index depends on their data type `t`
         infoboxTriples.join(infoboxPropertyDataType, "p").withColumn("t", dgraphDataTypesUdf($"t")).select($"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i")),
@@ -301,6 +292,8 @@ We can write the schema now once with indices:
 
     // write schema with indices
     predicates
+      // turn columns into schema line: "$p: $t $i .",
+      // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
       .select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"lang")
       .mode(SaveMode.Overwrite)
       .text(s"$base/$release/$dataset/schema.indexed.dgraph")
@@ -309,118 +302,79 @@ We can write the schema now once with indices:
 
     // write schema without indices
     predicates
+      // turn columns into schema line: "$p: $t $i .",
+      // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
       .select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"lang")
       .mode(SaveMode.Overwrite)
       .text(s"$base/$release/$dataset/schema.dgraph")
 
 ## External ids
 
-    val externaliseUris = false
+Dgraph does not support [external IDs](https://dgraph.io/docs/mutations/external-ids/) (URIs)
+as node identifiers. The recommended approach to preserve node URIs is to store them in the `<xid>` predicate.
+The Dgraph [bulk](https://dgraph.io/docs/deploy/fast-data-loading/#bulk-loader)
+and [live](https://dgraph.io/docs/deploy/fast-data-loading/#live-loader) loaders
+can convert external IDs for you. If you wish to generate an RDF dataset that does not use URIs
+as node identifiers but blank nodes, you can use the following approach.
+It defines a method `blank` that takes a column name and returns a `Column` that turns
+the given column (here all URI columns) into blank nodes:
 
     val blank = (c: String) => concat(lit("_:"), md5(col(c))).as(c)
 
     val labels =
       labelTriples
-        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
-        .conditionally(removeLanguageTags, _.withColumn("o", removeLangTag))
+        .withColumn("s", blank("s"))
+        .withColumn("o", removeLangTag)
 
     val infobox =
       infoboxTriplesWithDataType
-        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
-        .conditionally(externaliseUris, _.withColumn("v", when($"t" === "<uri>", blank("v")).otherwise(col("v"))))
+        .withColumn("s", blank("s"))
+        .withColumn("v", when($"t" === "<uri>", blank("v")).otherwise(col("v")))
 
     // article_categories
     val categories =
       categoryTriples
-        .conditionally(externaliseUris, _.withColumn("s", blank("s")))
-        .conditionally(externaliseUris, _.withColumn("o", blank("o")))
+        .withColumn("s", blank("s"))
+        .withColumn("o", blank("o"))
+
+We can generate the `<xid>` predicates for all datasets as follows:
+
+    val externalIds =
+      Seq(
+        labelTriples.select($"s", $"lang"),
+        infoboxTriples.select($"s", $"lang"),
+        interlangTriples.select($"s", $"lang"),
+        interlangTriples.select($"o".as("s"), $"lang")),
+        categoryTriples.select($"s", $"lang"),
+        categoryTriples.select($"o".as("s"), $"lang")
+      )
+        .map(_.distinct())
+        .reduce(_.unionByName(_))
+        .distinct()
+        .select(
+          blank("s"),
+          lit("<xid>").as("p"),
+          concat(lit("\""), $"s".substr(lit(2), length($"s")-2), lit("\"")).as("o"),
+          $"lang"
+        )
 
 ## Remove Language Tags
 
-    val removeLanguageTags = false
+We can remove language tags from triple values with a regular expression:
 
     val removeLangTag = regexp_replace(col("o"), "@[a-z]+$", "").as("o")
 
-    val labels =
-      labelTriples
-        .conditionally(removeLanguageTags, _.withColumn("o", removeLangTag))
+    val labels = labelTriples.withColumn("o", removeLangTag)
 
+This turns literals like `"Alan Smithee"@de` into `"Alan Smithee"`.
 
 ## Writing RDF files
+
+Finally, we want to store our processed triples into `.ttl` RDF files.:
 
     triples
       .select(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang")
       .write
       .partitionBy("lang")
       .option("compression", "gzip")
-      .mode(SaveMode.Overwrite)
       .text(path)
-
-## Scala Spark Helpers
-
-Above example code was taken from https://github.com/EnricoMi/dgraph-dbpedia.
-That code has been simplified to focus on the respective problem and to better exemplify the solution.
-The following helper methods are used in above project to simplify code and increase code reuse.
-
-### Conditional Transformation
-
-The Spark `DataFrame` API allows for chaining transformations as in the following example:
-
-    df.where($"id" === 1)
-      .withColumn("state", lit("new"))
-      .orderBy($"timestamp")
-
-If you want to perform any of the transformations only if a condition is true,
-then your you have to break that chaining and the code becomes harder to read:
-
-    val condition = true
-
-    val filteredDf = df.where($"id" === 1)
-    val condDf = if (condition) df.withColumn("state", lit("new")) else df
-    val result = df.orderBy($"timestamp")
-
-With the following implicit class you can conditionally call transformations:
-
-    implicit class ConditionalDataFrame[T](df: Dataset[T]) {
-      def conditionally(condition: Boolean, method: DataFrame => DataFrame): DataFrame =
-        if (condition) method(df.toDF) else df.toDF
-    }
-
-    val condition = true
-
-    val result =
-      df.where($"id" === 1)
-        .conditionally(condition, _.withColumn("state", lit("new")))
-        .orderBy($"timestamp")
-
-With an `Option`, this could look like:
-
-    val state: Option[String] = Some("new")
-
-    val result =
-      df.where($"id" === 1)
-        .conditionally(state.isDefined, _.withColumn("state", lit(state.get)))
-        .orderBy($"timestamp")
-
-### Even-sized Partitions for variable-sized Languages
-
-Spark splits `DataFrame`s into partitions to be able to scale out.
-   
-    implicit class PartitionedDataFrame[T](df: Dataset[T]) {
-      // with this range partition and sort you get fewer partitions
-      // for smaller languages and order within your partitions
-      // the partitionBy allows you to read in a subset of languages efficiently
-      def writePartitionedBy(hadoopPartitions: Seq[String],
-                             fileIds: Seq[String],
-                             fileOrder: Seq[String] = Seq.empty,
-                             projection: Option[Seq[Column]] = None): DataFrameWriter[Row] = {
-        df
-          .repartitionByRange((hadoopPartitions ++ fileIds).map(col): _*)
-          .sortWithinPartitions((hadoopPartitions ++ fileIds ++ fileOrder).map(col): _*)
-          .conditionally(projection.isDefined, _.select(projection.get: _*))
-          .write
-          .partitionBy(hadoopPartitions: _*)
-      }
-    }
-
-equivalent code for `writePartitionedBy`

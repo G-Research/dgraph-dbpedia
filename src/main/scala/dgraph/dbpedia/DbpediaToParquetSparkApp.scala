@@ -11,7 +11,7 @@ object DbpediaToParquetSparkApp {
   def main(args: Array[String]): Unit = {
 
     println("This tool writes all language datasets into a single parquet file.")
-    println("From there, Spark can load the data much more quicker, as well as easier load subsets of the languages.")
+    println("From there, Spark can load the data much quicker, as well as easier load subsets of the languages.")
 
     if (args.length < 2 || args.length > 4) {
       println()
@@ -20,6 +20,7 @@ object DbpediaToParquetSparkApp {
       println("defaults to: labels,infobox_properties,interlanguage_links,article_categories")
       System.exit(1)
     }
+    println()
 
     val base = args(0)
     val release = args(1)
@@ -75,6 +76,8 @@ object DbpediaToParquetSparkApp {
     println(s"all: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
     val duration = (System.nanoTime() - start) / 1000000000
     println(s"finished in ${duration / 3600}h ${(duration / 60) % 60}m ${duration % 60}s")
+
+    spark.stop()
   }
 
   def getLanguages(base: String, release: String, dataset: String): Seq[String] =

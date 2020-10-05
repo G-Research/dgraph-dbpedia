@@ -10,8 +10,8 @@ The last step uses the [Dgraph Bulk Loader](https://dgraph.io/docs/deploy/fast-d
 
 ## A large real-world dataset
 I was looking for a large real-world graph dataset to load into a Dgraph cluster to ultimately test
-my [dgraph-spark-connector](https://github.com/G-Research/spark-dgraph-connector).
-Dgraph organizes the graph around predicates, so that dataset should contain predicates with a few characteristics:
+my [spark-dgraph-connector](https://github.com/G-Research/spark-dgraph-connector).
+Dgraph organizes the graph around predicates, so that dataset should contain predicates with these characteristics:
 
 - numerous predicates, to have a large real-world schema
 - a predicate with a lot of data, ideally a long string that exists for every node
@@ -49,19 +49,18 @@ The other datasets provide a single predicate each.
 
 Use the `download.sh` script to download the datasets and languages that you want to load into Dgraph:
 
-    sh download.sh
+    ./download.sh [path] [languages]
 
-Configure the first block of variables in that file to your needs:
+Both arguments `path` and `languages` are optional. Without, the script downloads all languages into
+`./dbpedia`. To download only selected languages, run
 
-    RELEASE=2016-10
-    DATASET=core-i18n
-    LANGS="ar az be bg bn ca cs cy de el en eo es eu fr ga gl hi hr hu hy id it ja ko lv mk nl pl pt ro ru sk sl sr sv tr uk vi zh"
-    FILENAMES="labels infobox_properties interlanguage_links article_categories"
-    EXT=.ttl.bz2
+    ./download.sh dbpedia "en es fr de"
 
 You can find all available releases and datasets at http://downloads.dbpedia.org.
 Stats for each release date are published in the `statsitics` sub-directory,
 e.g. http://downloads.dbpedia.org/2016-10/statistics.
+
+Downloading the four datasets in all languages will require 7 GB disk space.
 
 ## Extract DBpedia
 
@@ -70,7 +69,9 @@ files cannot be processed efficiently, so they have to be extracted first.
 
 Run the `extract.sh` script:
 
-    sh extract.sh 2016-10
+    ./extract.sh dbpedia/2016-10
+
+Extracting the four datasets in all languages will require 130 GB disk space.
 
 ## Pre-Processing
 
@@ -80,13 +81,13 @@ and produces [Dgraph compatible RDF triples](https://dgraph.io/docs/mutations/tr
 First we produce parquet files from all `ttl` files. All languages will be stored
 in one parquet directory per dataset, where languages can still be selected in later steps.
 
-    mvn compile exec:java -Dexec.mainClass="dgraph.dbpedia.DbpediaToParquetSparkApp" -Dexec.args="dbpedia 2016-10"
+    mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="dgraph.dbpedia.DbpediaToParquetSparkApp" -Dexec.args="dbpedia 2016-10"
 
 Secondly, process these parquet files into RDF triple files:
 
-    MAVEN_OPTS=-Xmx8g mvn compile exec:java -Dexec.mainClass="dgraph.dbpedia.DbpediaDgraphSparkApp" -Dexec.args="dbpedia 2016-10"
+    mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="dgraph.dbpedia.DbpediaDgraphSparkApp" -Dexec.args="dbpedia 2016-10"
 
-These commands can optionally be given a comma separated list of language codes.
+These commands can optionally be given a comma separated list of language codes: `-Dexec.args="dbpedia 2016-10 en,es,fr,de"`.
 Without those language codes, all languages will be processed.
 
 There are more options at the beginning of the `main` method in `DbpediaDgraphSparkApp.scala`:
@@ -96,7 +97,7 @@ There are more options at the beginning of the `main` method in `DbpediaDgraphSp
     val topInfoboxPropertiesPerLang = None
     val printStats = true
 
-With `externaliseUris = true` the app turns all URIs into blank nodes and produces a `external_ids.rdf` file
+With `externaliseUris = true` the application turns all URIs into blank nodes and produces a `external_ids.rdf` file
 which provides the `<xid>` predicate for each blank node with the URI as a string value.
 See [External IDs](https://dgraph.io/docs/mutations/external-ids/) for more information.
 
@@ -106,18 +107,21 @@ are then also removed from the schema files `schema.dgraph` and `schema.indexed.
 Only the `100` largest infobox properties are provided in the RDF files with `topInfoboxPropertiesPerLang = Some(100)`.
 This can be used to control the size of the schema while allowing to add rich predicates.
 
-The `DbpediaDgraphSparkApp` requires 1 GB per CPU core. Above example is for an 8 core machine
-providing 8 GB memory to the app: `MAVEN_OPTS=-Xmx8g`
-
 With `printStats = false` you can turn-off some stats, which will reduce the processing time of the app.
 
-On termination, the app prints some information like the following line:
+### Memory Requirements
+
+The `DbpediaDgraphSparkApp` requires 1 GB per CPU core. You can set the memory available to the application
+via the `MAVEN_OPTS` environment variable:
+
+    MAVEN_OPTS=-Xmx8g mvn compile exec:java …
+
+On termination, the application prints some information like the following line:
 
     memory spill: 51 GB  disk spill: 4 GB  peak mem per host: 874 MB
 
-This provides an indication if more memory should be given to the app. Huge numbers of `disk spill`
-indicate lag of memory per core. The `peak mem per host` indicates the actual usage per core.
-If this is much smaller than the given amount of memory, then that can safely be reduced.
+This provides an indication if more memory should be given to the application. A huge number for
+`disk spill` indicates lag of memory per core.
 
 ## Generated Dataset Files
 
@@ -145,7 +149,7 @@ Load a single dataset and language:
 
     export lang=de; export dataset=labels.rdf; ./dgraph.bulk.sh $(pwd)/dbpedia/2016-10/core-i18n $(pwd)/dbpedia/2016-10/bulk "/data/schema.indexed.dgraph/lang=any/part-*.txt /data/schema.dgraph/lang=$lang/part-*.txt" "/data/$dataset/lang=$lang/part-*.txt.gz"
 
-The full dataset prepared above requires 64 GB RAM.
+The full dataset requires 64 GB RAM.
 
 Either use `schema.indexed.dgraph` with bulk loader to populate the indices during bulk loading,
 or bulk load with `schema.dgraph` and mutate the schema to `schema.indexed.dgraph` afterwards.

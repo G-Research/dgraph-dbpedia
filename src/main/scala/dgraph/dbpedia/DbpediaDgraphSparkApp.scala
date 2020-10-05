@@ -7,7 +7,7 @@ import dgraph.dbpedia.Helpers.ExtendedDataFrame
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.{Column, DataFrame, DataFrameReader, DataFrameWriter, Dataset, Row, SaveMode, SparkSession}
+import org.apache.spark.sql.{DataFrame, Dataset, SaveMode, SparkSession}
 
 object DbpediaDgraphSparkApp {
 
@@ -104,14 +104,12 @@ object DbpediaDgraphSparkApp {
       ) ++ topInfoboxPropertiesPerLang.map(topK =>
         Seq(s"top $topK infobox_properties" -> infoboxTriples)
       ).getOrElse(Seq.empty[(String, DataFrame)])
-      println()
 
       import spark.implicits._
       val langStats = stats.map { case (label, df) =>
         println(s"$label: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
         df.groupBy($"lang").count.withColumnRenamed("count", label)
       }.foldLeft(Seq.empty[String].toDF("lang")) { case (f, df) => f.join(df, Seq("lang"), "full_outer") }
-      langStats.show(100, false)
       println()
     }
 
@@ -310,6 +308,8 @@ object DbpediaDgraphSparkApp {
     println(s"memory spill: ${memSpilled.get() / 1024/1024/1024} GB  disk spill: ${diskSpilled.get() / 1024/1024/1024} GB  peak mem per host: ${peakMem.get() / 1024/1024} MB")
     val duration = (System.nanoTime() - start) / 1000000000
     println(s"finished in ${duration / 3600}h ${(duration / 60) % 60}m ${duration % 60}s")
+
+    spark.stop()
   }
 
   def getLanguages(base: String, release: String, dataset: String): Seq[String] =

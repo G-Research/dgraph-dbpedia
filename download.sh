@@ -2,11 +2,11 @@
 
 RELEASE=2016-10
 DATASET=core-i18n
-LANGS="ar az be bg bn ca cs cy de el en eo es eu fr ga gl hi hr hu hy id it ja ko lv mk nl pl pt ro ru sk sl sr sv tr uk vi zh"
+LANGS=${2:-ar az be bg bn ca cs cy de el en eo es eu fr ga gl hi hr hu hy id it ja ko lv mk nl pl pt ro ru sk sl sr sv tr uk vi zh}
 FILENAMES="labels infobox_properties interlanguage_links article_categories"
 EXT=.ttl.bz2
 
-base=$(cd $(dirname "$0"); pwd)
+base=${1:-$(pwd)/dbpedia}
 dir="$base/$RELEASE/$DATASET"
 
 echo "Downloading $RELEASE release of $DATASET into $dir"

@@ -127,6 +127,7 @@ object DbpediaDgraphSparkApp {
       }.foldLeft(Seq.empty[String].toDF("lang")) { case (f, df) => f.join(df, Seq("lang"), "full_outer") }
       println()
 
+      println("Triples per languages and dataset")
       langStats.show()
     }
 
@@ -339,7 +340,11 @@ object DbpediaDgraphSparkApp {
 
   def readParquet(path: String)(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._
-    spark.read.parquet(path).as[Triple]
+
+    if(new File(path).exists())
+      spark.read.parquet(path).as[Triple]
+    else
+      spark.emptyDataset[Triple].withColumn("lang", lit("")).as[Triple]
   }
 
   def writeRdf(df: DataFrame, path: String)(implicit spark: SparkSession): Unit = {

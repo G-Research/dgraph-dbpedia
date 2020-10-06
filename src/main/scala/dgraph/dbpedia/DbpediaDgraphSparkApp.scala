@@ -122,10 +122,12 @@ object DbpediaDgraphSparkApp {
 
       import spark.implicits._
       val langStats = stats.map { case (label, df) =>
-        println(s"$label: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
+        println(f"$label: ${df.count}%,d triples, ${df.select($"s").distinct().count}%,d nodes, ${df.select($"p").distinct().count}%,d predicates")
         df.groupBy($"lang").count.withColumnRenamed("count", label)
       }.foldLeft(Seq.empty[String].toDF("lang")) { case (f, df) => f.join(df, Seq("lang"), "full_outer") }
       println()
+
+      langStats.show()
     }
 
     // define labels without language tag (if removeLanguageTags is true)
@@ -198,7 +200,6 @@ object DbpediaDgraphSparkApp {
       "<http://www.w3.org/2001/XMLSchema#double>" -> "float",
       "<http://www.w3.org/2001/XMLSchema#integer>" -> "int",
       "<http://www.w3.org/2001/XMLSchema#string>" -> "string",
-//      "<http://www.w3.org/2001/XMLSchema#string>" -> (if (removeLanguageTags) "string" else "string @lang"),
     )
     // this is deterministic, but marking it non-deterministic guarantees it is executed only once per row
     val dgraphDataTypesUdf = udf(dgraphDataTypes(_)).asNondeterministic()
@@ -211,7 +212,6 @@ object DbpediaDgraphSparkApp {
       "float" -> "@index(float)",
       "int" -> "@index(int)",
       "string" -> "@index(fulltext)",
-//      "string @lang" -> "@index(fulltext)",
     )
     val dgraphIndicesUdf = udf(dgraphIndices(_)).asNondeterministic()
 

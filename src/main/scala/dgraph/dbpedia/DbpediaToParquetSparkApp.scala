@@ -81,14 +81,14 @@ object DbpediaToParquetSparkApp {
 
       // read from parquet file to print some stats
       val df = spark.read.parquet(parquet)
-      println(s"$filename: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
+      println(f"$filename: ${df.count}%,d triples, ${df.select($"s").distinct().count}%,d nodes, ${df.select($"p").distinct().count}%,d predicates")
       df
     }
     println()
 
     // print overall statistics
     val df = dfs.reduce(_.union(_))
-    println(s"all: ${df.count} triples, ${df.select($"s").distinct().count} nodes, ${df.select($"p").distinct().count} predicates")
+    println(f"all: ${df.count}%,d triples, ${df.select($"s").distinct().count}%,d nodes, ${df.select($"p").distinct().count}%,d predicates")
     val duration = (System.nanoTime() - start) / 1000000000
     println(s"finished in ${duration / 3600}h ${(duration / 60) % 60}m ${duration % 60}s")
 
@@ -100,7 +100,7 @@ object DbpediaToParquetSparkApp {
       .listFiles().toSeq
       .filter(_.isDirectory)
       .map(_.getName)
-      .filter(_.length == 2)
+      .filter(n => n.length == 2 || n.length == 3)
 
   def readTtl(paths: String*)(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._

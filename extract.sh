@@ -6,7 +6,7 @@ EXT=bz2
 
 if [ $# -ne 1 ]
 then
-	echo "Please provide the path to the release, e.g. 2016-10"
+	echo "Please provide the path to the release, e.g. dbpedia/2016-10"
 	exit 1
 fi
 
@@ -22,4 +22,3 @@ do
 	bunzip2 -c "$file" > "${file/%.bz2/}.inflate"
 	mv "${file/%.bz2/}.inflate" "${file/%.bz2/}"
 done
-

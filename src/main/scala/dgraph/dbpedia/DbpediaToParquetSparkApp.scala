@@ -31,8 +31,8 @@ object DbpediaToParquetSparkApp {
     if (args.length < 2 || args.length > 4) {
       println()
       println("Please provide path to dbpedia dataset and the release")
-      println("Optionally prov the languages (two-letters code, comma separated) and a comma separated list of datasets")
-      println("defaults to: labels,infobox_properties,interlanguage_links,article_categories")
+      println("Optionally provide the languages (two-letters code, comma separated) and a comma separated list of datasets")
+      println("When no datasets are given, then all datasets are loaded into parquet files")
       System.exit(1)
     }
     println()
@@ -41,7 +41,7 @@ object DbpediaToParquetSparkApp {
     val release = args(1)
     val dataset = "core-i18n"
     val languages = if (args.length >= 3) args(2).split(",").toSeq else getLanguages(base, release, dataset)
-    val filenames = if (args.length == 4) args(3).split(",").toSeq else Seq("labels", "infobox_properties", "interlanguage_links", "article_categories")
+    val filenames = if (args.length == 4) args(3).split(",").toSeq else getDatasets(base, release, dataset)
     val extension = ".ttl"
 
     val start = System.nanoTime()
@@ -101,6 +101,19 @@ object DbpediaToParquetSparkApp {
       .filter(_.isDirectory)
       .map(_.getName)
       .filter(n => n.length == 2 || n.length == 3)
+
+  def getDatasets(base: String, release: String, dataset: String): Seq[String] =
+    new File(new File(new File(base), release), dataset)
+      .listFiles().toSeq
+      .filter(_.isDirectory)
+      .filter(n => n.getName.length == 2 || n.getName.length == 3)
+      .flatMap(_.listFiles())
+      .filter(_.isFile)
+      .map(_.getName)
+      .filter(_.endsWith(".ttl"))
+      .map(n => n.substring(0, n.lastIndexOf("_")))
+      .distinct
+      .sorted
 
   def readTtl(paths: String*)(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._

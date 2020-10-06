@@ -344,7 +344,11 @@ object DbpediaDgraphSparkApp {
 
   def readParquet(path: String)(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._
-    spark.read.parquet(path).as[Triple]
+
+    if(new File(path).exists())
+      spark.read.parquet(path).as[Triple]
+    else
+      spark.emptyDataset[Triple].withColumn("lang", lit("")).as[Triple]
   }
 
   def writeRdf(df: DataFrame, path: String)(implicit spark: SparkSession): Unit = {

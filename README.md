@@ -31,6 +31,14 @@ Given the size of the datasets, a scalable pre-processing step is required.
 This project uses [Apache Spark](https://spark.apache.org/) to bring real-work graph data into a Dgraph-compatible shape.
 [Read the detailed tutorial on the pre-processing steps](SPARK.md).
 
+## Requirements
+
+This tutorial has the following requirements:
+
+- Unix command line shell bash
+- [Apache Maven](https://maven.apache.org/) installed
+- [Docker](https://www.docker.com/) CLI installed
+
 ## Datasets
 
 This tutorial uses the following datasets from [DBpedia project](https://wiki.dbpedia.org/):

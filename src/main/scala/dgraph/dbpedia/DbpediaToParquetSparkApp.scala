@@ -44,6 +44,11 @@ object DbpediaToParquetSparkApp {
     val filenames = if (args.length == 4) args(3).split(",").toSeq else getDatasets(base, release, dataset)
     val extension = ".ttl"
 
+    println(s"Loading release $release of $dataset")
+    println(s"Loading these languages: ${languages.mkString(", ")}")
+    println(s"Loading these datasets: ${filenames.mkString(", ")}")
+    println()
+
     val start = System.nanoTime()
 
     // start a local Spark session

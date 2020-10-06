@@ -14,6 +14,7 @@ my [spark-dgraph-connector](https://github.com/G-Research/spark-dgraph-connector
 Dgraph organizes the graph around predicates, so that dataset should contain predicates with these characteristics:
 
 - numerous predicates, to have a **large real-world schema**
+- a predicate that links a **deep hierarchy** of nodes
 - a predicate with a lot of data, ideally a long string that exists for **every node**
 - a predicate that links **strongly connected components**
 - a **long-tail** predicate frequency distribution: a few predicates have high frequency (and low selectivity), most predicates have low frequency (and high selectivity)
@@ -38,6 +39,7 @@ This tutorial has the following requirements:
 - Unix command line shell bash
 - [Apache Maven](https://maven.apache.org/) installed
 - [Docker](https://www.docker.com/) CLI installed
+- Disk space: 12 GB for download, 100GB temporary space
 
 ## Datasets
 

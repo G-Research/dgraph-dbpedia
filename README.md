@@ -13,9 +13,10 @@ I was looking for a large real-world graph dataset to load into a Dgraph cluster
 my [spark-dgraph-connector](https://github.com/G-Research/spark-dgraph-connector).
 Dgraph organizes the graph around predicates, so that dataset should contain predicates with these characteristics:
 
-- numerous predicates, to have a large real-world schema
-- a predicate with a lot of data, ideally a long string that exists for every node
-- a long-tail predicate frequency distribution: a few predicates have high frequency (and low selectivity), most predicates have low frequency (and high selectivity)
+- numerous predicates, to have a **large real-world schema**
+- a predicate with a lot of data, ideally a long string that exists for **every node**
+- a predicate that links **strongly connected components**
+- a **long-tail** predicate frequency distribution: a few predicates have high frequency (and low selectivity), most predicates have low frequency (and high selectivity)
 - predicates that, if they exist for a node:
   - have a single occurrence (single value)
   - have a multiple occurrences (value list)

@@ -40,7 +40,7 @@ object DbpediaDgraphSparkApp {
     val base = args(0)
     val release = args(1)
     val dataset = "core-i18n"
-    val languages = if (args.length == 3) args(2).split(",").toSeq else getLanguages(base, release, dataset)
+    val languages = if (args.length == 3) Some(args(2).split(",").toSeq) else None
     val externaliseUris = false
     val removeLanguageTags = false
     // set to None to get all infobox properties, or Some(100) to get top 100 infobox properties
@@ -48,7 +48,7 @@ object DbpediaDgraphSparkApp {
     val printStats = true
 
     println(s"Pre-processing release $release of $dataset")
-    println(s"Pre-processing these languages: ${languages.mkString(", ")}")
+    println(s"Pre-processing these languages: ${languages.map(_.mkString(", ")).getOrElse("all")}")
     if (externaliseUris)
       println("URIs will be externalized")
     if (removeLanguageTags)
@@ -89,10 +89,10 @@ object DbpediaDgraphSparkApp {
     val removeLangTag = regexp_replace(col("o"), "@[a-z]+$", "").as("o")
 
     // load files from parquet, only these datasets are pre-processed
-    val labelTriples = readParquet(s"$base/$release/$dataset/labels.parquet").where($"lang".isin(languages: _*))
-    val allInfoboxTriples = readParquet(s"$base/$release/$dataset/infobox_properties.parquet").where($"lang".isin(languages: _*))
-    val interlangTriples = readParquet(s"$base/$release/$dataset/interlanguage_links.parquet").where($"lang".isin(languages: _*))
-    val categoryTriples = readParquet(s"$base/$release/$dataset/article_categories.parquet").where($"lang".isin(languages: _*))
+    val labelTriples = readParquet(s"$base/$release/$dataset/labels.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
+    val allInfoboxTriples = readParquet(s"$base/$release/$dataset/infobox_properties.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
+    val interlangTriples = readParquet(s"$base/$release/$dataset/interlanguage_links.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
+    val categoryTriples = readParquet(s"$base/$release/$dataset/article_categories.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
     val infoboxTriples = topInfoboxPropertiesPerLang.foldLeft(allInfoboxTriples){ case (triples, topk) =>
       // get the top-k most frequent properties per language
       val topkProperties =
@@ -177,7 +177,7 @@ object DbpediaDgraphSparkApp {
     // we are only interested in links inside our set of languages
     // we look at the dbpedia urls, en links may not contain the language code in the url,
     // but we expect `db` at its place, so with `en` in languages, we also look for links with `db`
-    val langs = languages ++ (if (languages.contains("en")) Seq("db") else Seq.empty[String])
+    val langs = languages.getOrElse(Seq.empty) ++ (if (languages.contains("en")) Seq("db") else Seq.empty[String])
     val interlang =
       interlangTriples
         .where($"o".substr(9, 2).isin(langs: _*))
@@ -319,7 +319,7 @@ object DbpediaDgraphSparkApp {
     println()
 
     val infoboxRdf = spark.read.text(s"$base/$release/$dataset/infobox_properties.rdf")
-    println(s"cleaned-up infoboxes cover ${infoboxRdf.count() * 100 / infoboxTriples.count()}% of original rows")
+    println(s"cleaned-up infoboxes cover ${infoboxRdf.count() * 100 / math.max(infoboxTriples.count(), 1)}% of original rows")
     println(s"memory spill: ${memSpilled.get() / 1024/1024/1024} GB  disk spill: ${diskSpilled.get() / 1024/1024/1024} GB  peak mem per host: ${peakMem.get() / 1024/1024} MB")
     val duration = (System.nanoTime() - start) / 1000000000
     println(s"finished in ${duration / 3600}h ${(duration / 60) % 60}m ${duration % 60}s")

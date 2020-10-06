@@ -58,18 +58,26 @@ object DbpediaToParquetSparkApp {
         .master("local[*]")
         .appName("Spark Dgraph DBpedia App")
         .config("spark.local.dir", ".")
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.ui.showConsoleProgress", "false")
         .getOrCreate()
     import spark.implicits._
 
-    // turn all supported files into parquet
+    // turn all files into parquet
     val dfs = filenames.map { filename =>
       val parquet = s"$base/$release/$dataset/${filename}.parquet"
 
-      // for each langage, read the ttl file and add the `lang` column
-      languages.map(lang =>
-        readTtl(s"$base/$release/$dataset/$lang/${filename}_$lang$extension")
+      // for each language, read the ttl file and add the `lang` column
+      // also read the en_uris dataset (if it exists)
+      languages.map { lang =>
+        val path = s"$base/$release/$dataset/$lang/${filename}_$lang$extension"
+        val enUrisPath = s"$base/$release/$dataset/$lang/${filename}_en_uris_$lang$extension"
+
+        readTtl(path)
+          .when(new File(enUrisPath).exists())
+          .call(_.unionByName(readTtl(enUrisPath).toDF))
           .withColumn("lang", lit(lang))
-      )
+      }
         // union all ttl files
         .reduce(_.unionByName(_))
         // write all data partitioned by language `lang` and sorted by `s`, `p` and `o`
@@ -117,6 +125,7 @@ object DbpediaToParquetSparkApp {
       .map(_.getName)
       .filter(_.endsWith(".ttl"))
       .map(n => n.substring(0, n.lastIndexOf("_")))
+      .filter(!_.endsWith("_en_uris"))
       .distinct
       .sorted
 

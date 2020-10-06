@@ -13,12 +13,12 @@ I was looking for a large real-world graph dataset to load into a Dgraph cluster
 my [spark-dgraph-connector](https://github.com/G-Research/spark-dgraph-connector).
 Dgraph organizes the graph around predicates, so that dataset should contain predicates with these characteristics:
 
-- numerous predicates, to have a **large real-world schema**
 - a predicate that links a **deep hierarchy** of nodes
 - a predicate that links a **deep network** of nodes
 - a predicate that links **strongly connected components**
-- a predicate with a lot of data, ideally a long string that exists for **every node**
+- a predicate with a lot of data, ideally a long string that exists for **every** node and with **multiple** languages
 - a predicate with geo coordinates (type Point)
+- numerous predicates, to have a **large** schema
 - a **long-tail** predicate frequency distribution:
   a few predicates have high frequency (and low selectivity),
   most predicates have low frequency (and high selectivity)
@@ -43,7 +43,7 @@ This tutorial has the following requirements:
 - Unix command line shell bash
 - [Apache Maven](https://maven.apache.org/) installed
 - [Docker](https://www.docker.com/) CLI installed
-- Disk space: 12 GB for download, 100GB temporary space
+- Disk space: 12 GB to download, 206 GB to extract, 23 GB for parquet, 50 GB temporary space
 
 ## Datasets
 
@@ -52,11 +52,13 @@ This tutorial uses the following datasets from [DBpedia project](https://wiki.db
 |dataset             |filename                        |description|
 |--------------------|--------------------------------|-----------|
 |labels              |`labels_{lang}.ttl`             |Each article has a single title in the article's language.|
-|category            |`article_categories_{lang}.ttl` |Some articles link to categories, multiple categories allowed. Forms a category hierarchy.|
+|category            |`article_categories_{lang}.ttl` |Some articles link to categories, multiple categories allowed.|
+|skos                |`skos_categories_{lang}.ttl`    |Categories link to broader categories, forming a hierarchy. Forms a category hierarchy.|
 |inter-language links|`interlanguage_links_{lang}.ttl`|Articles link to the same article in all other languages. Forms strongly connected components.|
 |page links          |`page_links_{lang}.ttl`         |Articles link to other articles or other resources. Forms a network of articles.|
 |infobox             |`infobox_properties_{lang}.ttl` |Some articles have infoboxes. Provides structured information as key-value tables.|
 |geo coordinates     |`geo_coordinates_{lang}.ttl`    |Some articles have geo coordinates of type `Point`.|
+|en_uris             |`{dataset}_en_uris_{lang}.ttl`  |Non-English `labels`, `infobox` and `category` predicates for English articles. Provides multiple language strings and predicates for articles.|
 
 The `infobox` dataset provides real-world user-generated multi-language predicates.
 The other datasets provide a fixed set of predicates each.
@@ -267,11 +269,19 @@ Result:
 
 The following language codes are available for the `2016-10` datasets in `core-i18n`:
 
-    ar az be bg bn ca cs cy de el en eo es eu fr ga gl hi hr hu hy id it ja ko lv mk nl pl pt ro ru sk sl sr sv tr uk vi zh
+    af als am an ar arz ast az azb ba bar be bg bn bpy br bs bug
+    ca ce ceb ckb cs cv cy da de el en eo es et eu fa fi fo fr fy
+    ga gd gl gu he hi hr hsb ht hu hy ia id io is it ja jv ka kk
+    kn ko ku ky la lb li lmo lt lv mg min mk ml mn mr mrj ms my
+    mzn nah nap nds ne new nl nn no oc or os pa pl pms pnb pt qu
+    ro ru sa sah scn sco sh si sk sl sq sr su sv sw ta te tg th
+    tl tr tt uk ur uz vec vi vo wa war yi yo zh
 
-The datasets are bz2 compressed and 6.9 GB in size.
+The datasets are bz2 compressed and 12 GB in size.
 
-They extract to `.ttl` files of 129 GB size.
+They extract to `.ttl` files of 206 GB size.
+
+Those loaded into parquet consumes 23 GB.
 
 ### Dataset Statistics
 
@@ -283,6 +293,19 @@ They extract to `.ttl` files of 129 GB size.
 |interlanguage_links|437,284,461|36,810,756|1|`Article --owl:sameAs-> Article`|
 |article_categories|90,057,060|29,557,857|1|`Article --dcterms:subject-> Category`|
 |all    |877,621,590|61,840,283|482,464||
+
+article_categories: 149.254.994 triples, 41.655.032 nodes, 1 predicates
+infobox_properties: 515.287.770 triples, 26.000.773 nodes, 987.316 predicates
+interlanguage_links: 656.814.200 triples, 49.426.513 nodes, 1 predicates
+labels: 81.565.220 triples, 66.692.584 nodes, 1 predicates
+skos_categories: 47.495.725 triples, 8.447.863 nodes, 4 predicates
+all: 1.450.417.909 triples, 79.407.706 nodes, 987.323 predicates
+
+parquet (4 cores, 2 GB, ssd): finished in 0h 55m 45s
+rdf (4 cores, 8 GB, ssd): finished in 0h 40m 8s
+
+cleaned-up infoboxes cover 91% of original rows
+
 
 ### Language Statistics
 

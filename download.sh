@@ -2,7 +2,7 @@
 
 RELEASE=2016-10
 DATASET=core-i18n
-LANGS=${2:-ar az be bg bn ca cs cy de el en eo es eu fr ga gl hi hr hu hy id it ja ko lv mk nl pl pt ro ru sk sl sr sv tr uk vi zh}
+LANGS=${2:-af als am an ar arz ast az azb ba bar be bg bn bpy br bs bug ca ce ceb ckb cs cv cy da de el en eo es et eu fa fi fo fr fy ga gd gl gu he hi hr hsb ht hu hy ia id io is it ja jv ka kk kn ko ku ky la lb li lmo lt lv mg min mk ml mn mr mrj ms my mzn nah nap nds ne new nl nn no oc or os pa pl pms pnb pt qu ro ru sa sah scn sco sh si sk sl sq sr su sv sw ta te tg th tl tr tt uk ur uz vec vi vo wa war yi yo zh}
 FILENAMES="labels infobox_properties interlanguage_links article_categories"
 EXT=.ttl.bz2
 

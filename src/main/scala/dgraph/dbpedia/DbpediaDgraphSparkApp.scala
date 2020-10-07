@@ -92,6 +92,7 @@ object DbpediaDgraphSparkApp {
     val labelTriples = readParquet(s"$base/$release/$dataset/labels.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
     val allInfoboxTriples = readParquet(s"$base/$release/$dataset/infobox_properties.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
     val interlangTriples = readParquet(s"$base/$release/$dataset/interlanguage_links.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
+    val pageLinksTriples = readParquet(s"$base/$release/$dataset/page_links.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
     val categoryTriples = readParquet(s"$base/$release/$dataset/article_categories.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
     val skosTriples = readParquet(s"$base/$release/$dataset/skos_categories.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
     val infoboxTriples = topInfoboxPropertiesPerLang.foldLeft(allInfoboxTriples){ case (triples, topk) =>
@@ -116,6 +117,7 @@ object DbpediaDgraphSparkApp {
         "labels" -> labelTriples,
         "infobox_properties" -> allInfoboxTriples,
         "interlanguage_links" -> interlangTriples,
+        "page_links" -> pageLinksTriples,
         "article_categories" -> categoryTriples,
         "skos_categories" -> skosTriples
       ) ++ topInfoboxPropertiesPerLang.map(topK =>
@@ -191,6 +193,12 @@ object DbpediaDgraphSparkApp {
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
+    // page_links
+    val pageLinks =
+      pageLinksTriples
+        .when(externaliseUris).call(_.withColumn("s", blank("s")))
+        .when(externaliseUris).call(_.withColumn("o", blank("o")))
+
     // article_categories
     val categories =
       categoryTriples
@@ -232,27 +240,37 @@ object DbpediaDgraphSparkApp {
     // helper variable in case we are removing language tags
     val lang = if (removeLanguageTags) "" else " @lang"
 
-    // define all predicates from our four datasets
+    // define all predicates from our datasets
     // for each dataset we provide: `p`: the predicate, `lang`: its language, `t`: its Dgraph data type, `i`: indices
     val predicates =
       Seq(
-        // labels are always strings with fulltext index
-        labelTriples.select($"p", lit("any").as("lang"), lit(s"string${lang}").as("t"), lit("@index(fulltext)").as("i")),
-        // infobox properties data type and index depends on their data type `t`
-        infoboxTriples.join(infoboxPropertyDataType, "p").withColumn("t", dgraphDataTypesUdf($"t")).select($"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i")),
-        // interlanguage links are always uri lists with reverse index
-        interlangTriples.select($"p", lit("any").as("lang"), lit("[uid]").as("t"), lit("@reverse").as("i")),
-        // categories are always uri lists with reverse index
-        categoryTriples.select($"p", lit("any").as("lang"), lit("[uid]").as("t"), lit("@reverse").as("i")),
-        // skos categories has these four predicates
         Seq(
+          // labels dataset has a single predicate
+          ("<http://www.w3.org/2000/01/rdf-schema#label>", "any", s"string${lang}", "@index(fulltext)"),
+
+          // categories dataset has a single predicate
+          ("<http://purl.org/dc/terms/subject>", "any", "[uid]", "@reverse"),
+
+          // skos categories has these four predicates
           ("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>", "any", "uid", "@reverse"),
           ("<http://www.w3.org/2004/02/skos/core#prefLabel>", "any", s"string${lang}", "@index(fulltext)"),
           ("<http://www.w3.org/2004/02/skos/core#related>", "any", "[uid]", "@reverse"),
-          ("<http://www.w3.org/2004/02/skos/core#broader>", "any", "[uid]", "@reverse")
-        ).toDF("p", "lang", "t", "i")
+          ("<http://www.w3.org/2004/02/skos/core#broader>", "any", "[uid]", "@reverse"),
+
+          // interlanguage links dataset has a single predicate
+          ("<http://www.w3.org/2002/07/owl#sameAs>", "any", "[uid]", "@reverse"),
+
+          // page links has this predicate
+          ("<http://dbpedia.org/ontology/wikiPageWikiLink>", "any", "[uid]", "@reverse")
+        ).toDF("p", "lang", "t", "i"),
+
+        // infobox properties data type and index depends on their data type `t`
+        infoboxTriples
+          .join(infoboxPropertyDataType, "p")
+          .withColumn("t", dgraphDataTypesUdf($"t"))
+          .select($"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i"))
+          .distinct(),
       ).reduce(_.unionByName(_))
-        // we are only interested in one line per predicate
         .distinct()
         .when(externaliseUris).call(_.unionByName(xid))
         .sort()
@@ -292,6 +310,7 @@ object DbpediaDgraphSparkApp {
         infoboxTriples.select($"s", $"lang"),
         interlangTriples.select($"s", $"lang").where($"o".substr(9, 2).isin(langs: _*)),
         interlangTriples.select($"o".as("s"), $"lang").where($"o".substr(9, 2).isin(langs: _*)),
+        pageLinksTriples.select($"s", $"lang"),
         categoryTriples.select($"s", $"lang")
       )
         .map(_.distinct())
@@ -321,6 +340,8 @@ object DbpediaDgraphSparkApp {
         infoboxTriples.select($"s", $"lang"),
         interlangTriples.select($"s", $"lang").where($"o".substr(9, 2).isin(langs: _*)),
         interlangTriples.select($"o".as("s"), $"lang").where($"o".substr(9, 2).isin(langs: _*)),
+        pageLinksTriples.select($"s", $"lang"),
+        pageLinksTriples.select($"o".as("s"), $"lang"),
         categoryTriples.select($"s", $"lang"),
         categoryTriples.select($"o".as("s"), $"lang"),
         skosTriples.select($"s", $"lang").where($"p".isin("<http://www.w3.org/2004/02/skos/core#related>", "<http://www.w3.org/2004/02/skos/core#broader>")),
@@ -342,6 +363,7 @@ object DbpediaDgraphSparkApp {
     writeRdf(labels, s"$base/$release/$dataset/labels.rdf")
     writeRdf(infobox, s"$base/$release/$dataset/infobox_properties.rdf")
     writeRdf(interlang.toDF, s"$base/$release/$dataset/interlanguage_links.rdf")
+    writeRdf(pageLinks.toDF, s"$base/$release/$dataset/page_links.rdf")
     writeRdf(categories.toDF, s"$base/$release/$dataset/article_categories.rdf")
     writeRdf(skosCategories.toDF, s"$base/$release/$dataset/skos_categories.rdf")
     writeRdf(types.toDF, s"$base/$release/$dataset/types.rdf")

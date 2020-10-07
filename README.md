@@ -15,9 +15,13 @@ Dgraph organizes the graph around predicates, so that dataset should contain pre
 
 - numerous predicates, to have a **large real-world schema**
 - a predicate that links a **deep hierarchy** of nodes
-- a predicate with a lot of data, ideally a long string that exists for **every node**
+- a predicate that links a **deep network** of nodes
 - a predicate that links **strongly connected components**
-- a **long-tail** predicate frequency distribution: a few predicates have high frequency (and low selectivity), most predicates have low frequency (and high selectivity)
+- a predicate with a lot of data, ideally a long string that exists for **every node**
+- a predicate with geo coordinates (type Point)
+- a **long-tail** predicate frequency distribution:
+  a few predicates have high frequency (and low selectivity),
+  most predicates have low frequency (and high selectivity)
 - predicates that, if they exist for a node:
   - have a single occurrence (single value)
   - have a multiple occurrences (value list)
@@ -48,13 +52,14 @@ This tutorial uses the following datasets from [DBpedia project](https://wiki.db
 |dataset             |filename                        |description|
 |--------------------|--------------------------------|-----------|
 |labels              |`labels_{lang}.ttl`             |Each article has a single title in the article's language.|
-|category            |`article_categories_{lang}.ttl` |Some articles link to categories, multiple categories allowed.|
-|inter-language links|`interlanguage_links_{lang}.ttl`|Articles link to the same article in all other languages.|
-|infobox             |`infobox_properties_{lang}.ttl` |Some articles have infoboxes. This are key-value tables that provide structured information.|
+|category            |`article_categories_{lang}.ttl` |Some articles link to categories, multiple categories allowed. Forms a category hierarchy.|
+|inter-language links|`interlanguage_links_{lang}.ttl`|Articles link to the same article in all other languages. Forms strongly connected components.|
+|page links          |`page_links_{lang}.ttl`         |Articles link to other articles or other resources. Forms a network of articles.|
+|infobox             |`infobox_properties_{lang}.ttl` |Some articles have infoboxes. Provides structured information as key-value tables.|
+|geo coordinates     |`geo_coordinates_{lang}.ttl`    |Some articles have geo coordinates of type `Point`.|
 
 The `infobox` dataset provides real-world user-generated multi-language predicates.
-The other datasets provide a single predicate each.
-
+The other datasets provide a fixed set of predicates each.
 
 ## Download DBpedia
 

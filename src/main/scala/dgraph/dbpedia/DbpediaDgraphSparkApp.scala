@@ -22,6 +22,7 @@ import dgraph.dbpedia.Helpers.ExtendedDataFrame
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types.{ArrayType, FloatType}
 import org.apache.spark.sql.{DataFrame, Dataset, SaveMode, SparkSession}
 
 object DbpediaDgraphSparkApp {
@@ -88,13 +89,15 @@ object DbpediaDgraphSparkApp {
     val blank = (c: String) => concat(lit("_:"), md5(col(c))).as(c)
     val removeLangTag = regexp_replace(col("o"), "@[a-z]+$", "").as("o")
 
-    // load files from parquet, only these datasets are pre-processed
-    val labelTriples = readParquet(s"$base/$release/$dataset/labels.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
-    val allInfoboxTriples = readParquet(s"$base/$release/$dataset/infobox_properties.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
-    val interlangTriples = readParquet(s"$base/$release/$dataset/interlanguage_links.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
-    val pageLinksTriples = readParquet(s"$base/$release/$dataset/page_links.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
-    val categoryTriples = readParquet(s"$base/$release/$dataset/article_categories.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
-    val skosTriples = readParquet(s"$base/$release/$dataset/skos_categories.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
+    // load files from parquet, only these datasets are being pre-processed
+    val path = s"$base/$release/$dataset"
+    val labelTriples = readParquet(path, "labels", languages)
+    val allInfoboxTriples = readParquet(path, "infobox_properties", languages)
+    val interlangTriples = readParquet(path, "interlanguage_links", languages)
+    val pageLinksTriples = readParquet(path, "page_links", languages)
+    val categoryTriples = readParquet(path, "article_categories", languages)
+    val skosTriples = readParquet(path, "skos_categories", languages)
+    val geoTriples = readParquet(path, "geo_coordinates", languages)
     val infoboxTriples = topInfoboxPropertiesPerLang.foldLeft(allInfoboxTriples){ case (triples, topk) =>
       // get the top-k most frequent properties per language
       val topkProperties =
@@ -119,7 +122,8 @@ object DbpediaDgraphSparkApp {
         "interlanguage_links" -> interlangTriples,
         "page_links" -> pageLinksTriples,
         "article_categories" -> categoryTriples,
-        "skos_categories" -> skosTriples
+        "skos_categories" -> skosTriples,
+        "geo_coordinates" -> geoTriples
       ) ++ topInfoboxPropertiesPerLang.map(topK =>
         Seq(s"top $topK infobox_properties" -> infoboxTriples)
       ).getOrElse(Seq.empty[(String, DataFrame)])
@@ -212,6 +216,17 @@ object DbpediaDgraphSparkApp {
         .when(externaliseUris).call(_.withColumn("o", when($"p" === "<http://www.w3.org/2004/02/skos/core#prefLabel>", $"o").otherwise(blank("o"))))
         .when(removeLanguageTags).call(_.withColumn("o", when($"p" === "<http://www.w3.org/2004/02/skos/core#prefLabel>", removeLangTag).otherwise($"o")))
 
+    // geo_coordinates
+    val geoCoordinates =
+      geoTriples
+        .where($"p" === "<http://www.georss.org/georss/point>")
+        .withColumn("point", regexp_replace($"o", "\"", ""))
+        .withColumn("coordinates", split($"point", " ").cast(ArrayType(FloatType)))
+        .withColumn("json", to_json(struct(lit("Point").as("type"), $"coordinates")))
+        .withColumn("o", regexp_replace($"json", "\"", "\\\\\""))
+        .withColumn("o", concat(lit("\""), $"o", lit("\"^^<geo:geojson>")))
+        .when(externaliseUris).call(_.withColumn("s", blank("s")))
+
     // xid predicate
     val xid = Seq(("<xid>", "any", "string", "@index(exact)")).toDF("p", "lang", "t", "i")
 
@@ -261,7 +276,10 @@ object DbpediaDgraphSparkApp {
           ("<http://www.w3.org/2002/07/owl#sameAs>", "any", "[uid]", "@reverse"),
 
           // page links has this predicate
-          ("<http://dbpedia.org/ontology/wikiPageWikiLink>", "any", "[uid]", "@reverse")
+          ("<http://dbpedia.org/ontology/wikiPageWikiLink>", "any", "[uid]", "@reverse"),
+
+          // geo coordinates dataset has this predicate
+          ("<http://www.georss.org/georss/point>", "any", "geo", "@index(geo)")
         ).toDF("p", "lang", "t", "i"),
 
         // infobox properties data type and index depends on their data type `t`
@@ -311,7 +329,8 @@ object DbpediaDgraphSparkApp {
         interlangTriples.select($"s", $"lang").where($"o".substr(9, 2).isin(langs: _*)),
         interlangTriples.select($"o".as("s"), $"lang").where($"o".substr(9, 2).isin(langs: _*)),
         pageLinksTriples.select($"s", $"lang"),
-        categoryTriples.select($"s", $"lang")
+        categoryTriples.select($"s", $"lang"),
+        geoTriples.select($"s", $"lang")
       )
         .map(_.distinct())
         .reduce(_.unionByName(_))
@@ -347,7 +366,8 @@ object DbpediaDgraphSparkApp {
         skosTriples.select($"s", $"lang").where($"p".isin("<http://www.w3.org/2004/02/skos/core#related>", "<http://www.w3.org/2004/02/skos/core#broader>")),
         skosTriples.select($"o".as("s"), $"lang").where($"p".isin("<http://www.w3.org/2004/02/skos/core#related>", "<http://www.w3.org/2004/02/skos/core#broader>")),
         // skosTriples contains this rdf type, externalize it as well
-        Seq(("<http://www.w3.org/2004/02/skos/core#Concept>", "any")).toDF("s", "lang")
+        Seq(("<http://www.w3.org/2004/02/skos/core#Concept>", "any")).toDF("s", "lang"),
+        geoTriples.select($"s", $"lang")
       )
         .map(_.distinct())
         .reduce(_.unionByName(_))
@@ -366,6 +386,7 @@ object DbpediaDgraphSparkApp {
     writeRdf(pageLinks.toDF, s"$base/$release/$dataset/page_links.rdf")
     writeRdf(categories.toDF, s"$base/$release/$dataset/article_categories.rdf")
     writeRdf(skosCategories.toDF, s"$base/$release/$dataset/skos_categories.rdf")
+    writeRdf(geoCoordinates.toDF, s"$base/$release/$dataset/geo_coordinates.rdf")
     writeRdf(types.toDF, s"$base/$release/$dataset/types.rdf")
     if (externaliseUris)
       writeRdf(externalIds.toDF, s"$base/$release/$dataset/external_ids.rdf")
@@ -389,6 +410,11 @@ object DbpediaDgraphSparkApp {
       .filter(f => f.isDirectory && f.getName.startsWith("lang="))
       .map(_.getName.substring(5))
       .distinct
+
+  def readParquet(path: String, dataset: String, languages: Option[Seq[String]])(implicit spark: SparkSession): Dataset[Triple] = {
+    import spark.implicits._
+    readParquet(s"$path/${dataset}.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
+  }
 
   def readParquet(path: String)(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._

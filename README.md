@@ -10,14 +10,14 @@ The last step uses the [Dgraph Bulk Loader](https://dgraph.io/docs/deploy/fast-d
 
 ## A large real-world dataset
 I was looking for a large real-world graph dataset to load into a Dgraph cluster to ultimately test
-my [spark-dgraph-connector](https://github.com/G-Research/spark-dgraph-connector).
+the [spark-dgraph-connector](https://github.com/G-Research/spark-dgraph-connector).
 Dgraph organizes the graph around predicates, so that dataset should contain predicates with these characteristics:
 
 - a predicate that links a **deep hierarchy** of nodes
 - a predicate that links a **deep network** of nodes
 - a predicate that links **strongly connected components**
 - a predicate with a lot of data, ideally a long string that exists for **every** node and with **multiple** languages
-- a predicate with geo coordinates (type Point)
+- a predicate with geo coordinates
 - numerous predicates, to have a **large** schema
 - a **long-tail** predicate frequency distribution:
   a few predicates have high frequency (and low selectivity),
@@ -31,7 +31,7 @@ Dgraph organizes the graph around predicates, so that dataset should contain pre
 A dataset that checks all these boxes can be found at the [DBpedia project](https://wiki.dbpedia.org/).
 They extract structured information from the [Wikipedia project](https://wikipedia.org/) and provide them in RDF format.
 However, that RDF data requires some preparation before it can be loaded into Dgraph.
-Given the size of the datasets, a scalable pre-processing step is required.
+The size of the datasets requires a scalable pre-processing step.
 
 This project uses [Apache Spark](https://spark.apache.org/) to bring real-work graph data into a Dgraph-compatible shape.
 [Read the detailed tutorial on the pre-processing steps](SPARK.md).
@@ -43,6 +43,7 @@ This tutorial has the following requirements:
 - Unix command line shell bash
 - [Apache Maven](https://maven.apache.org/) installed
 - [Docker](https://www.docker.com/) CLI installed
+- A multi-core machine with SSD disk
 - Disk space: 19 GB to download, 374 GB to extract, 42 GB for parquet, 75 GB temporary space
 
 ## Datasets
@@ -63,6 +64,17 @@ This tutorial uses the following datasets from [DBpedia project](https://wiki.db
 The `infobox` dataset provides real-world user-generated multi-language predicates.
 The other datasets provide a fixed set of predicates each.
 
+The `{dataset}_en_uris_{lang}.ttl` dataset is special. For three datasets `labels`, `infobox` and `category`,
+it provides non-English data for Englisch articles. All data from these datasets are stored in parquet
+and RDF under the `en-{lang}` languages. For instance, when you run `DbpediaDgraphSparkApp` with
+languages `en` and `de`, then you will also get the `{dataset}_en_uris_de.ttl` datasets from language `en-de` as well.
+Without the `en` language, you will not use any of the `{dataset}_en_uris_{lang}.ttl` datasets.
+
+## Mix-and-Match your dataset
+
+You can easily prepare any subset of this dataset. Download only those datasets and languages that you are interested in.
+Start with a small language to go through these steps once. Then download and prepare all languages that you want.
+
 ## Download DBpedia
 
 Use the `download.sh` script to download the datasets and languages that you want to load into Dgraph:
@@ -78,7 +90,7 @@ You can find all available releases and datasets at http://downloads.dbpedia.org
 Stats for each release date are published in the `statsitics` sub-directory,
 e.g. http://downloads.dbpedia.org/2016-10/statistics.
 
-Downloading the four datasets in all languages will require 7 GB disk space.
+Downloading the four datasets in all languages will require 19 GB disk space.
 
 ## Extract DBpedia
 
@@ -89,7 +101,7 @@ Run the `extract.sh` script:
 
     ./extract.sh dbpedia/2016-10
 
-Extracting the four datasets in all languages will require 130 GB disk space.
+Extracting the four datasets in all languages will require 374 GB disk space.
 
 ## Pre-Processing
 
@@ -112,7 +124,7 @@ There are more options at the beginning of the `main` method in `DbpediaDgraphSp
 
     val externaliseUris = false
     val removeLanguageTags = false
-    val topInfoboxPropertiesPerLang = None
+    val topInfoboxPropertiesPerLang = Some(100)
     val printStats = true
 
 With `externaliseUris = true` the application turns all URIs into blank nodes and produces a `external_ids.rdf` file
@@ -124,8 +136,9 @@ are then also removed from the schema files `schema.dgraph` and `schema.indexed.
 
 Only the `100` largest infobox properties are provided in the RDF files with `topInfoboxPropertiesPerLang = Some(100)`.
 This can be used to control the size of the schema while allowing to add rich predicates.
+Use `None` to get all 1 mio predicates from all datasets and languages.
 
-With `printStats = false` you can turn-off some stats, which will reduce the processing time of the app.
+With `printStats = false` you can turn-off some stats, which will reduce the processing time of the application.
 
 ### Memory Requirements
 
@@ -286,20 +299,20 @@ and 363 GB uncompressed.
 
 |dataset|triples|nodes|predicates|.bz |.ttl|.parquet|.rdf|schema|
 |:------|------:|----:|---------:|---:|---:|-------:|---:|:-----|
-|labels|94.410.463|76.478.687|1| | |2 GB|1 GB|`Article --rdfs:label-> lang string`|
-|article_categories|149.254.994|41.655.032|1| | |3 GB|2 GB|`Article --dcterms:subject-> Category`|
-|skos_categories|47.495.725|8.447.863|4| | |0.7 GB|0.4 GB|`Category --skos-core:broader-> Category`|
-|interlanguage_links|656.814.200|49.426.513|1| | |11 GB|5 GB|`Article --owl:sameAs-> Article`|
-|page_links|1.042.567.811|76.392.179|1| | |17 GB|10 GB|`Article --dbpedia:wikiPageWikiLink-> Article`|
-|geo_coordinates|1.825.817|1.825.817|1| | |0.1 GB|0.03 GB|`Article --georss:point-> geoJSON`|
-|infobox_properties|596.338.417|29.871.174|1.050.938| | | | |`Article --property-> literal or uri`|
+|labels|94.410.463|76.478.687|1|1 GB|12 GB|2 GB|1 GB|`Article --rdfs:label-> lang string`|
+|article_categories|149.254.994|41.655.032|1|1 GB|22 GB|3 GB|2 GB|`Article --dcterms:subject-> Category`|
+|skos_categories|47.495.725|8.447.863|4|0.3 GB|8 GB|0.7 GB|0.4 GB|`Category --skos-core:broader-> Category`|
+|interlanguage_links|656.814.200|49.426.513|1|5 GB|92 GB|11 GB|5 GB|`Article --owl:sameAs-> Article`|
+|page_links|1.042.567.811|76.392.179|1|7 GB|154 GB|17 GB|10 GB|`Article --dbpedia:wikiPageWikiLink-> Article`|
+|geo_coordinates|1.825.817|1.825.817|1|0.05 GB|1 GB|0.1 GB|0.03 GB|`Article --georss:point-> geoJSON`|
+|infobox_properties|596.338.417|29.871.174|1.050.938|4 GB|87 GB| | |`Article --property-> literal or uri`|
 |top-100 infobox_properties|364.484.645|27.594.565|10.571| | |9 GB|3 GB|`Article --property-> literal or uri`|
-|all|2.594.184.878|86.737.376|1.050.949| | |42 GB|25 GB| |
+|all|2.594.184.878|86.737.376|1.050.949|19 GB|374 GB|42 GB|25 GB| |
 
-Loading the entire dataset into parquets takes 2 hours on an 8 cores machine with SSD disk and 2 GB JVM memory.
+Loading the entire dataset into parquets takes 2 hours on an 8-core machine with SSD disk and 2 GB JVM memory.
 This requires 10 to 30 GB of temporary disk space, depending on the dataset that your are loading.
 
-Processing the dataset into RDF takes 2 1/2 hours on a 4 cores machine with SSD disk and 8 GB JVM memory.
+Processing the dataset into RDF takes 2 1/2 hours on a 4-core machine with SSD disk and 12 GB JVM memory.
 
 
 ### Language Statistics

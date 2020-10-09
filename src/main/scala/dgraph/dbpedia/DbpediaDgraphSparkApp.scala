@@ -41,7 +41,7 @@ object DbpediaDgraphSparkApp {
     val base = args(0)
     val release = args(1)
     val dataset = "core-i18n"
-    val languages = if (args.length == 3) Option(args(2).split(",").toSeq) else None
+    val languages = if (args.length == 3) getLanguages(args(2)) else None
     val externaliseUris = false
     val removeLanguageTags = false
     // set to None to get all infobox properties, or Some(100) to get top 100 infobox properties
@@ -411,19 +411,29 @@ object DbpediaDgraphSparkApp {
     spark.stop()
   }
 
-  def getLanguages(base: String, release: String, dataset: String): Seq[String] =
-    new File(new File(new File(base), release), dataset)
-      .listFiles().toSeq
-      .filter(_.isDirectory)
-      .filter(_.getName.endsWith(".parquet"))
-      .flatMap(_.listFiles())
-      .filter(f => f.isDirectory && f.getName.startsWith("lang="))
-      .map(_.getName.substring(5))
-      .distinct
+  def getLanguages(langs: String): Option[Seq[String]] = {
+    val languages =
+      Some(langs.split(",").toSeq.filter(_.nonEmpty))
+        .filter(_.nonEmpty)
+
+    languages
+      .map(ls =>
+        Some(ls)
+          .filter(_.contains("en"))
+          .getOrElse(Seq.empty)
+          .filterNot(_.equals("en"))
+          .map(l => s"en-$l")
+          ++ ls
+      )
+      .map(_.sorted)
+  }
 
   def readParquet(path: String, dataset: String, languages: Option[Seq[String]])(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._
-    readParquet(s"$path/${dataset}.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
+    readParquet(s"$path/${dataset}.parquet")
+      .when(languages.isDefined)
+      .call(_.where($"lang".isin(languages.get: _*)))
+      .as[Triple]
   }
 
   def readParquet(path: String)(implicit spark: SparkSession): Dataset[Triple] = {
@@ -461,7 +471,8 @@ object DbpediaDgraphSparkApp {
       .text(path)
 
     if (printStats)
-      println(f": ${spark.read.text(path).count()}%,d triples")
+      print(f": ${spark.read.text(path).count()}%,d triples")
+    println
   }
 
   def extractDataType(value: String): Array[String] = {

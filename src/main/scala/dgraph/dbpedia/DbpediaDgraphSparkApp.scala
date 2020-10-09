@@ -111,9 +111,9 @@ object DbpediaDgraphSparkApp {
     // we derive geo values from one predicate only
     val geoTriples = readParquet(path, "geo_coordinates", languages).where($"p" === "<http://www.georss.org/georss/point>")
     val infoboxTriples = topInfoboxPropertiesPerLang.foldLeft(allInfoboxTriples){ case (triples, topk) =>
-      // get the top-k most frequent properties per language
+      // get the top-k most frequent properties per language (ignore en-* languages)
       val topkProperties =
-        triples
+        triples.where(!$"lang".contains("-"))
           .groupBy($"p", $"lang").count()
           .withColumn("k", row_number() over Window.partitionBy($"lang").orderBy($"count".desc, $"p"))
           .where($"k" <= topk)
@@ -121,8 +121,10 @@ object DbpediaDgraphSparkApp {
           .cache()
 
       // filter triples for top-k most frequent properties per language
+      // take top-k en properties from en-{lang} datasets
       triples
-        .join(topkProperties, Seq("p", "lang"), "left_semi")
+        .withColumn("node-lang", when($"lang".contains("-"), "en").otherwise($"lang"))
+        .join(topkProperties.withColumn("node-lang", $"lang"), Seq("p", "node-lang"), "left_semi")
         .as[Triple]
     }
 

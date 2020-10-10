@@ -265,26 +265,26 @@ object DbpediaDgraphSparkApp {
       Seq(
         Seq(
           // labels dataset has a single predicate
-          ("<http://www.w3.org/2000/01/rdf-schema#label>", "any", s"string${lang}", "@index(fulltext)"),
+          ("labels", "<http://www.w3.org/2000/01/rdf-schema#label>", "any", s"string${lang}", "@index(fulltext)"),
 
           // categories dataset has a single predicate
-          ("<http://purl.org/dc/terms/subject>", "any", "[uid]", "@reverse"),
+          ("article_categories", "<http://purl.org/dc/terms/subject>", "any", "[uid]", "@reverse"),
 
           // skos categories has these four predicates
-          ("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>", "any", "uid", "@reverse"),
-          ("<http://www.w3.org/2004/02/skos/core#prefLabel>", "any", s"string${lang}", "@index(fulltext)"),
-          ("<http://www.w3.org/2004/02/skos/core#related>", "any", "[uid]", "@reverse"),
-          ("<http://www.w3.org/2004/02/skos/core#broader>", "any", "[uid]", "@reverse"),
+          ("skos_categories", "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>", "any", "uid", "@reverse"),
+          ("skos_categories", "<http://www.w3.org/2004/02/skos/core#prefLabel>", "any", s"string${lang}", "@index(fulltext)"),
+          ("skos_categories", "<http://www.w3.org/2004/02/skos/core#related>", "any", "[uid]", "@reverse"),
+          ("skos_categories", "<http://www.w3.org/2004/02/skos/core#broader>", "any", "[uid]", "@reverse"),
 
           // interlanguage links dataset has a single predicate
-          ("<http://www.w3.org/2002/07/owl#sameAs>", "any", "[uid]", "@reverse"),
+          ("interlanguage_links", "<http://www.w3.org/2002/07/owl#sameAs>", "any", "[uid]", "@reverse"),
 
           // page links has this predicate
-          ("<http://dbpedia.org/ontology/wikiPageWikiLink>", "any", "[uid]", "@reverse"),
+          ("page_links", "<http://dbpedia.org/ontology/wikiPageWikiLink>", "any", "[uid]", "@reverse"),
 
           // geo coordinates dataset has this predicate
-          ("<http://www.georss.org/georss/point>", "any", "geo", "@index(geo)")
-        ).toDF("p", "lang", "t", "i"),
+          ("geo_coordinates", "<http://www.georss.org/georss/point>", "any", "geo", "@index(geo)")
+        ).toDF("dataset", "p", "lang", "t", "i"),
 
         // infobox properties data type and index depends on their data type `t`
         // infobox properties from en-* languages have en properties
@@ -292,7 +292,7 @@ object DbpediaDgraphSparkApp {
           .join(infoboxPropertyDataType, "p")
           .withColumn("t", dgraphDataTypesUdf($"t"))
           .withColumn("lang", when($"lang".contains("-"), "en").otherwise($"lang"))
-          .select($"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i"))
+          .select(lit("infobox_properties").as("dataset"), $"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i"))
           .distinct(),
       ).reduce(_.unionByName(_))
         .distinct()
@@ -307,10 +307,10 @@ object DbpediaDgraphSparkApp {
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
+      .writePartitionedBy(Seq("dataset", "lang"), Seq("p"), Seq.empty,
         // turn columns into schema line: "$p: $t $i .",
         // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
-        _.select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"lang")
+        _.select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"dataset", $"lang")
       )
       .mode(SaveMode.Overwrite)
       .text(schemaPath)
@@ -324,10 +324,10 @@ object DbpediaDgraphSparkApp {
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
+      .writePartitionedBy(Seq("dataset", "lang"), Seq("p"), Seq.empty,
         // turn columns into schema line: "$p: $t $i .",
         // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
-        _.select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"lang")
+        _.select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"dataset", $"lang")
       )
       .mode(SaveMode.Overwrite)
       .text(schemaIndexedPath)

@@ -84,7 +84,7 @@ Use the `download.sh` script to download the datasets and languages that you wan
 Both arguments `path` and `languages` are optional. Without, the script downloads all languages into
 `./dbpedia`. To download only selected languages, run
 
-    ./download.sh dbpedia "en es fr de"
+    ./download.sh dbpedia "en es fr zh jp"
 
 You can find all available releases and datasets at http://downloads.dbpedia.org.
 Stats for each release date are published in the `statsitics` sub-directory,
@@ -111,11 +111,11 @@ and produces [Dgraph compatible RDF triples](https://dgraph.io/docs/mutations/tr
 First we produce parquet files from all `ttl` files. All languages will be stored
 in one parquet directory per dataset, where languages can still be selected in later steps.
 
-    mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="dgraph.dbpedia.DbpediaToParquetSparkApp" -Dexec.args="dbpedia 2016-10"
+    MAVEN_OPTS=-Xmx2g mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="dgraph.dbpedia.DbpediaToParquetSparkApp" -Dexec.args="dbpedia 2016-10"
 
 Secondly, process these parquet files into RDF triple files:
 
-    mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="dgraph.dbpedia.DbpediaDgraphSparkApp" -Dexec.args="dbpedia 2016-10"
+    MAVEN_OPTS=-Xmx8g mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="dgraph.dbpedia.DbpediaDgraphSparkApp" -Dexec.args="dbpedia 2016-10"
 
 These commands can optionally be given a comma separated list of language codes: `-Dexec.args="dbpedia 2016-10 en,es,fr,de"`.
 Without those language codes, all languages will be processed.
@@ -142,8 +142,8 @@ With `printStats = false` you can turn-off some stats, which will reduce the pro
 
 ### Memory Requirements
 
-The `DbpediaDgraphSparkApp` requires 1 GB per CPU core. You can set the memory available to the application
-via the `MAVEN_OPTS` environment variable:
+The `DbpediaDgraphSparkApp` requires at least 1 GB per CPU core, ideally 2 GB.
+You can set the memory available to the application via the `MAVEN_OPTS` environment variable:
 
     MAVEN_OPTS=-Xmx8g mvn compile exec:java …
 
@@ -151,8 +151,8 @@ On termination, the application prints some information like the following line:
 
     memory spill: 51 GB  disk spill: 4 GB  peak mem per host: 874 MB
 
-This provides an indication if more memory should be given to the application. A huge number for
-`disk spill` indicates lag of memory per core.
+This provides an indication if more memory should be given to the application.
+A huge number (upper two digits GB) for `disk spill` indicates lag of memory per core.
 
 ## Generated Dataset Files
 
@@ -176,9 +176,9 @@ Load all datasets and all languages:
 
     ./dgraph.bulk.sh $(pwd)/dbpedia/2016-10/core-i18n $(pwd)/dbpedia/2016-10/bulk "/data/schema.indexed.dgraph/*/part-*.txt" "/data/*.rdf/*/part-*.txt.gz"
 
-Load a subset of datasets and languages:
+Load a subset of datasets and languages, defined via `langs` and `datasets`:
 
-    export langs="en*"; export datasets="labels.rdf"; ./dgraph.bulk.sh $(pwd)/dbpedia/2016-10/core-i18n $(pwd)/dbpedia/2016-10/bulk "/data/schema.indexed.dgraph/lang=any/part-*.txt /data/schema.dgraph/lang=@($langs)/part-*.txt" "/data/@($datasets)/lang=@($langs)/part-*.txt.gz"
+    export langs="en|en-es|en-fr|en-zh|en-jp"; export datasets="labels|infobox_properties"; ./dgraph.bulk.sh $(pwd)/dbpedia/2016-10/core-i18n $(pwd)/dbpedia/2016-10/bulk "/data/schema.dgraph/dataset=@($datasets)/lang=@($langs|any)/part-*.txt" "/data/@($datasets).rdf/lang=@($langs)/part-*.txt.gz"
 
 The full dataset requires 64 GB RAM.
 

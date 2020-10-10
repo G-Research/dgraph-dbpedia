@@ -287,9 +287,11 @@ object DbpediaDgraphSparkApp {
         ).toDF("p", "lang", "t", "i"),
 
         // infobox properties data type and index depends on their data type `t`
+        // infobox properties from en-* languages have en properties
         infoboxTriples
           .join(infoboxPropertyDataType, "p")
           .withColumn("t", dgraphDataTypesUdf($"t"))
+          .withColumn("lang", when($"lang".contains("-"), "en").otherwise($"lang"))
           .select($"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i"))
           .distinct(),
       ).reduce(_.unionByName(_))

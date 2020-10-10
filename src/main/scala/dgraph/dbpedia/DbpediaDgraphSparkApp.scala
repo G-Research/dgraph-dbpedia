@@ -92,10 +92,12 @@ object DbpediaDgraphSparkApp {
     val blank = (c: String) => concat(lit("_:"), md5(col(c))).as(c)
     val removeLangTag = regexp_replace(col("o"), "@[a-z]+$", "").as("o")
 
+    // we look at the object dbpedia urls, en links may not contain the language code in the url,
+    // but we expect `dbpedia` at its place, so with `en` in languages, we also look for links with `dbpedia`
     def getObjectLanguages(allLanguages: Dataset[String]): Seq[String] =
       languages
         .orElse(Some(allLanguages.collect().toSeq))
-        .map(l => l ++ (if (l.contains("en")) Seq("db") else Seq.empty[String]))
+        .map(l => l ++ (if (l.contains("en")) Seq("dbpedia") else Seq.empty[String]))
         .get
 
     // load files from parquet, only these datasets are being pre-processed
@@ -104,10 +106,12 @@ object DbpediaDgraphSparkApp {
     val allInfoboxTriples = readParquet(path, "infobox_properties", languages)
     val allInterlangTriples = readParquet(path, "interlanguage_links", languages)
     // we are only interested in links inside our set of languages
-    // we look at the object dbpedia urls, en links may not contain the language code in the url,
-    // but we expect `db` at its place, so with `en` in languages, we also look for links with `db`
     val objectLangs = getObjectLanguages(allInterlangTriples.select($"lang").distinct.as[String])
-    val interlangTriples = allInterlangTriples.where($"o".substr(9, 2).isin(objectLangs: _*))
+
+    // these are deterministic, but marking them non-deterministic guarantees they are executed only once per row
+    val getNodeLangUdf = udf((uri: String) => uri.split("\\.")(0).substring(8)).asNondeterministic()
+
+    val interlangTriples = allInterlangTriples.where(getNodeLangUdf($"o").isin(objectLangs: _*))
     val pageLinksTriples = readParquet(path, "page_links", languages)
     val categoryTriples = readParquet(path, "article_categories", languages)
     val skosTriples = readParquet(path, "skos_categories", languages)

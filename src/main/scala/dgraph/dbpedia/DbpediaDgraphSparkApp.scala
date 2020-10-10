@@ -42,6 +42,7 @@ object DbpediaDgraphSparkApp {
     val release = args(1)
     val dataset = "core-i18n"
     val languages = if (args.length == 3) getLanguages(args(2)) else None
+    val writeTypes = false  // this is very expensive, only do if you need it
     val externaliseUris = false
     val removeLanguageTags = false
     // set to None to get all infobox properties, or Some(100) to get top 100 infobox properties
@@ -50,6 +51,8 @@ object DbpediaDgraphSparkApp {
 
     println(s"Pre-processing release $release of $dataset")
     println(s"Pre-processing these languages: ${languages.map(_.mkString(", ")).getOrElse("all")}")
+    if (writeTypes)
+      println("Writing type information")
     if (externaliseUris)
       println("URIs will be externalized")
     if (removeLanguageTags)
@@ -132,12 +135,12 @@ object DbpediaDgraphSparkApp {
     if (printStats) {
       val stats = Seq(
         "labels" -> labelTriples,
-        "infobox_properties" -> allInfoboxTriples,
         "interlanguage_links" -> interlangTriples,
         "page_links" -> pageLinksTriples,
         "article_categories" -> categoryTriples,
         "skos_categories" -> skosTriples,
-        "geo_coordinates" -> geoTriples
+        "geo_coordinates" -> geoTriples,
+        "infobox_properties" -> allInfoboxTriples
       ) ++ topInfoboxPropertiesPerLang.map(topK =>
         Seq(s"top $topK infobox_properties" -> infoboxTriples)
       ).getOrElse(Seq.empty[(String, DataFrame)])
@@ -147,10 +150,27 @@ object DbpediaDgraphSparkApp {
         println(f"$label: ${df.count}%,d triples, ${df.select($"s").distinct().count}%,d nodes, ${df.select($"p").distinct().count}%,d predicates")
         df.groupBy($"lang").count.withColumnRenamed("count", label)
       }.foldLeft(Seq.empty[String].toDF("lang")) { case (f, df) => f.join(df, Seq("lang"), "full_outer") }
+        .cache
       println()
 
       println("Triples per languages and dataset:")
-      langStats.orderBy($"lang").show(1000, false)
+      // print all languages and aggregate all en-* langs
+      langStats
+        .where(!$"lang".startsWith("en-"))
+        .union(
+          langStats
+            .where($"lang".startsWith("en-"))
+            .withColumn("lang", lit("en-*"))
+            .groupBy($"lang")
+            .sum()
+        )
+        .orderBy($"lang")
+        .show(1000, false)
+      // print all en-* langs
+      langStats
+        .where($"lang".startsWith("en-"))
+        .orderBy($"lang")
+        .show(1000, false)
     }
 
     // define labels without language tag (if removeLanguageTags is true)
@@ -335,38 +355,6 @@ object DbpediaDgraphSparkApp {
       print(f": ${spark.read.text(schemaIndexedPath).count()}%,d lines")
     println
 
-    // get all types from the datasets
-    val articlesTypes =
-      Seq(
-        labelTriples.select($"s", $"lang"),
-        infoboxTriples.select($"s", $"lang"),
-        interlangTriples.select($"s", $"lang"),
-        interlangTriples.select($"o".as("s"), $"lang"),
-        pageLinksTriples.select($"s", $"lang"),
-        categoryTriples.select($"s", $"lang"),
-        geoTriples.select($"s", $"lang")
-      )
-        .map(_.distinct())
-        .reduce(_.unionByName(_))
-        .withColumn("p", lit("<dgraph.type>"))
-        .withColumn("o", lit("\"Article\""))
-    val categoryTypes =
-      categoryTriples
-        .select($"o".as("s"), $"lang").distinct()
-        .withColumn("p", lit("<dgraph.type>"))
-        .withColumn("o", lit("\"Category\""))
-    val skosTypes =
-      skosTriples
-        .select($"s", $"lang")
-        .withColumn("p", lit("<dgraph.type>"))
-        .withColumn("o", lit("\"Concept\""))
-    val types =
-      articlesTypes
-        .unionByName(categoryTypes)
-        .unionByName(skosTypes)
-        .distinct()
-        .when(externaliseUris).call(_.withColumn("s", blank("s")))
-
     val externalIds =
       Seq(
         labelTriples.select($"s", $"lang"),
@@ -377,7 +365,7 @@ object DbpediaDgraphSparkApp {
         pageLinksTriples.select($"o".as("s"), $"lang"),
         categoryTriples.select($"s", $"lang"),
         categoryTriples.select($"o".as("s"), $"lang"),
-        skosTriples.select($"s", $"lang").where($"p".isin("<http://www.w3.org/2004/02/skos/core#related>", "<http://www.w3.org/2004/02/skos/core#broader>")),
+        skosTriples.select($"s", $"lang"),
         skosTriples.select($"o".as("s"), $"lang").where($"p".isin("<http://www.w3.org/2004/02/skos/core#related>", "<http://www.w3.org/2004/02/skos/core#broader>")),
         // skosTriples contains this rdf type, externalize it as well
         Seq(("<http://www.w3.org/2004/02/skos/core#Concept>", "any")).toDF("s", "lang"),
@@ -394,19 +382,54 @@ object DbpediaDgraphSparkApp {
         )
 
     // write dgraph rdf files
-    writeRdf(labels, s"$base/$release/$dataset/labels.rdf", printStats)
-    writeRdf(infobox, s"$base/$release/$dataset/infobox_properties.rdf", printStats)
-    writeRdf(interlang.toDF, s"$base/$release/$dataset/interlanguage_links.rdf", printStats)
-    writeRdf(pageLinks.toDF, s"$base/$release/$dataset/page_links.rdf", printStats)
-    writeRdf(categories.toDF, s"$base/$release/$dataset/article_categories.rdf", printStats)
-    writeRdf(skosCategories.toDF, s"$base/$release/$dataset/skos_categories.rdf", printStats)
-    writeRdf(geoCoordinates.toDF, s"$base/$release/$dataset/geo_coordinates.rdf", printStats)
-    writeRdf(types.toDF, s"$base/$release/$dataset/types.rdf", printStats)
+    val labelsRdf = writeRdf(labels, s"$base/$release/$dataset/labels.rdf", printStats)
+    val infoboxRdf = writeRdf(infobox, s"$base/$release/$dataset/infobox_properties.rdf", printStats)
+    val interlangRdf = writeRdf(interlang.toDF, s"$base/$release/$dataset/interlanguage_links.rdf", printStats)
+    val pageLinksRdf = writeRdf(pageLinks.toDF, s"$base/$release/$dataset/page_links.rdf", printStats)
+    val categoryRdf = writeRdf(categories.toDF, s"$base/$release/$dataset/article_categories.rdf", printStats)
+    val skosRdf = writeRdf(skosCategories.toDF, s"$base/$release/$dataset/skos_categories.rdf", printStats)
+    val geoRdf = writeRdf(geoCoordinates.toDF, s"$base/$release/$dataset/geo_coordinates.rdf", printStats)
+
+    if (writeTypes) {
+      // get all types from the rdf files
+      val articlesTypes =
+        Seq(
+          labelsRdf.select($"s", $"lang"),
+          infoboxRdf.select($"s", $"lang"),
+          interlangRdf.select($"s", $"lang"),
+          interlangRdf.select($"o".as("s"), $"lang"),
+          pageLinksRdf.select($"s", $"lang"),
+          categoryRdf.select($"s", $"lang"),
+          geoRdf.select($"s", $"lang")
+        )
+          .map(_.distinct())
+          .reduce(_.unionByName(_))
+          .withColumn("p", lit("<dgraph.type>"))
+          .withColumn("o", lit("\"Article\""))
+      val categoryTypes =
+        categoryRdf
+          .select($"o".as("s"), $"lang").distinct()
+          .withColumn("p", lit("<dgraph.type>"))
+          .withColumn("o", lit("\"Category\""))
+      val skosTypes =
+        skosRdf
+          .select($"s", $"lang")
+          .withColumn("p", lit("<dgraph.type>"))
+          .withColumn("o", lit("\"Concept\""))
+      val types =
+        // no need to externalise the uris here, we read them from parquet, they are externalised already
+        articlesTypes
+          .unionByName(categoryTypes)
+          .unionByName(skosTypes)
+          .distinct()
+      writeRdf(types.toDF, s"$base/$release/$dataset/types.rdf", printStats)
+    }
+
     if (externaliseUris)
       writeRdf(externalIds.toDF, s"$base/$release/$dataset/external_ids.rdf", printStats)
+
     println()
 
-    val infoboxRdf = spark.read.text(s"$base/$release/$dataset/infobox_properties.rdf")
     println(s"cleaned-up infoboxes cover ${infoboxRdf.count() * 100 / math.max(infoboxTriples.count(), 1)}% of original rows")
     println(s"memory spill: ${memSpilled.get() / 1024/1024/1024} GB  disk spill: ${diskSpilled.get() / 1024/1024/1024} GB  peak mem per host: ${peakMem.get() / 1024/1024} MB")
     val duration = (System.nanoTime() - start) / 1000000000
@@ -449,7 +472,7 @@ object DbpediaDgraphSparkApp {
       spark.emptyDataset[Triple].withColumn("lang", lit("")).as[Triple]
   }
 
-  def writeRdf(df: DataFrame, path: String, printStats: Boolean)(implicit spark: SparkSession): Unit = {
+  def writeRdf(df: DataFrame, path: String, printStats: Boolean)(implicit spark: SparkSession): DataFrame = {
     import spark.implicits._
 
     print(s"writing $path")
@@ -477,6 +500,21 @@ object DbpediaDgraphSparkApp {
     if (printStats)
       print(f": ${spark.read.text(path).count()}%,d triples")
     println
+
+    readRdf(path)
+  }
+
+  def readRdf(paths: String*)(implicit spark: SparkSession): DataFrame = {
+    import spark.implicits._
+
+    spark
+      // read the rdf file as a text file
+      .read.text(paths: _*).as[(String, String)]
+      // remove the last two characters (' .') from the ttl lines
+      // and split at the first two spaces (three columns: subject, predicate, object)
+      .map{ case (triple, lang) => (triple.dropRight(2).split(" ", 3), lang) }
+      // get the three columns `s`, `p` and `o`, and `lang`
+      .select($"_1"(0).as("s"), $"_1"(1).as("p"), $"_1"(2).as("o"), $"_2".as("lang"))
   }
 
   def extractDataType(value: String): Array[String] = {

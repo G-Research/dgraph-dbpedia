@@ -1,5 +1,7 @@
 #!/bin/bash
 
+shopt -s extglob
+
 schema_file=/dgraph/schema.dgraph
 # data dir will be truncated
 data_dir=/dgraph/data

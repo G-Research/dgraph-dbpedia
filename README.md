@@ -176,9 +176,9 @@ Load all datasets and all languages:
 
     ./dgraph.bulk.sh $(pwd)/dbpedia/2016-10/core-i18n $(pwd)/dbpedia/2016-10/bulk "/data/schema.indexed.dgraph/*/part-*.txt" "/data/*.rdf/*/part-*.txt.gz"
 
-Load a single dataset and language:
+Load a subset of datasets and languages:
 
-    export lang=de; export dataset=labels.rdf; ./dgraph.bulk.sh $(pwd)/dbpedia/2016-10/core-i18n $(pwd)/dbpedia/2016-10/bulk "/data/schema.indexed.dgraph/lang=any/part-*.txt /data/schema.dgraph/lang=$lang/part-*.txt" "/data/$dataset/lang=$lang/part-*.txt.gz"
+    export langs="en*"; export datasets="labels.rdf"; ./dgraph.bulk.sh $(pwd)/dbpedia/2016-10/core-i18n $(pwd)/dbpedia/2016-10/bulk "/data/schema.indexed.dgraph/lang=any/part-*.txt /data/schema.dgraph/lang=@($langs)/part-*.txt" "/data/@($datasets)/lang=@($langs)/part-*.txt.gz"
 
 The full dataset requires 64 GB RAM.
 

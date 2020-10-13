@@ -16,7 +16,7 @@ cat $schema > "$schema_file"
 shift
 
 # link all data files from data dir
-mkdir -p "$data_dir" 
+mkdir -p "$data_dir"
 rm -f "$data_dir"/*
 for file in $(ls -d ${@})
 do
@@ -38,4 +38,5 @@ sleep 5
 # start bulk loader
 echo "bulk loading"
 rm -rf /dgraph/out /dgraph/xidmap
+mkdir -p /dgraph/tmp
 dgraph bulk --store_xids --xidmap /dgraph/xidmap -j 4 --ignore_errors --tmp /dgraph/tmp -f "$(join , $(ls $data_dir/*))" -s "$schema_file" --format=rdf --out=/dgraph/out --replace_out 2>&1 | tee /dgraph/bulk.log

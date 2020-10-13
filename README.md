@@ -309,17 +309,18 @@ Result:
 |interlanguage_links|546,769,314|49,426,513|1|5 GB|92 GB|11 GB|5 GB|`Article --owl:sameAs-> Article`|
 |page_links|1,042,567,811|76,392,179|1|7 GB|154 GB|17 GB|10 GB|`Article --dbpedia:wikiPageWikiLink-> Article`|
 |geo_coordinates|1,825,817|1,825,817|1|0.05 GB|1 GB|0.1 GB|0.03 GB|`Article --georss:point-> geoJSON`|
-|top-100 infobox_properties|298,289,529|27,332,261|12,714| | |9 GB|3 GB|`Article --property-> literal or uri`|
-|all (with top-100 infobox)|2,166,065,560|86,737,376|12,723|19 GB|372 GB|42 GB|21 GB| |
+|top-100 infobox_properties|298,289,529|27,332,261|12,714| | | |3 GB|`Article --property-> literal or uri`|
+|all (with top-100 infobox)|2,166,065,560|86,737,376|12,723| | | |21 GB| |
 ||||||||||
-|all infobox_properties|596,338,417|29,753,821|1,050,875|4 GB|87 GB| | |`Article --property-> literal or uri`|
-|all (with all infobox)|2,396,517,559|86,737,376|1,050,884|19 GB|372 GB|42 GB|21 GB| |
+|all infobox_properties|596,338,417|29,753,821|1,050,875|4 GB|87 GB|9 GB|6 GB|`Article --property-> literal or uri`|
+|all (with all infobox)|2,396,517,559|86,737,376|1,050,884|19 GB|372 GB|42 GB|24 GB| |
 
 The original dataset files are `.bz2` compressed and 19 GB in size. They extract to `.ttl` files of 374 GB size.
 
-Those loaded into parquet consume 42 GB, processed into TTL RDF files occupy 21 GB `.gz` compressed and 317 GB uncompressed.
+Those loaded into parquet consume 42 GB, processed into TTL RDF files (with top 100 infobox properties)
+occupy 21 GB `.gz` compressed and 317 GB uncompressed.
 
-The RDf loaded into Dgraph requires 36 GB for the `out` directory with indices and 27 GB without, 7 GB for `xidmap`, and 16 GB for `zw`.
+The RDF loaded into Dgraph requires 36 GB for the `out` directory with indices and 27 GB without, 7 GB for `xidmap`, and 16 GB for `zw`.
  
 Loading the entire dataset into parquets takes 2 hours on an 8-core machine with SSD disk and 2 GB JVM memory.
 This requires 10 to 30 GB of temporary disk space, depending on the dataset that your are loading.

@@ -11,14 +11,12 @@ then
 fi
 
 base="$1"
+extract=$(dirname "$0")
 
-echo "Extracting these files:"
-find -L "$base" -name "*.$EXT" | while read file; do if [ ! -e "${file/%.$EXT/}" ]; then echo $file; fi; done | sort
-echo
+# extract files in parallel and in reverse file size order
+#find -L "$base" -name "*.$EXT" -exec ls -s "{}" ";" | sort -nr | cut -d " " -f 2- | while read file; do if [ ! -e "${file/%.$EXT/}" ]; then echo $file; fi; done | sort | parallel --will-cite --progress --eta $extract/extract_file.sh
 
 find -L "$base" -name "*.$EXT" | while read file; do if [ ! -e "${file/%.$EXT/}" ]; then echo $file; fi; done | sort | while read file
 do
-	echo "extracting $file"
-	bunzip2 -c "$file" > "${file/%.bz2/}.inflate"
-	mv "${file/%.bz2/}.inflate" "${file/%.bz2/}"
+	$extract/extract_file.sh "$file"
 done

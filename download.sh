@@ -3,7 +3,15 @@
 RELEASE=2016-10
 DATASET=core-i18n
 LANGS=${2:-af als am an ar arz ast az azb ba bar be bg bn bpy br bs bug ca ce ceb ckb cs cv cy da de el en eo es et eu fa fi fo fr fy ga gd gl gu he hi hr hsb ht hu hy ia id io is it ja jv ka kk kn ko ku ky la lb li lmo lt lv mg min mk ml mn mr mrj ms my mzn nah nap nds ne new nl nn no oc or os pa pl pms pnb pt qu ro ru sa sah scn sco sh si sk sl sq sr su sv sw ta te tg th tl tr tt uk ur uz vec vi vo wa war yi yo zh}
-FILENAMES="labels infobox_properties interlanguage_links page_links article_categories skos_categories geo_coordinates"
+FILENAMES="
+labels labels_en_uris
+infobox_properties infobox_properties_en_uris
+interlanguage_links
+page_links
+article_categories article_categories_en_uris
+skos_categories
+geo_coordinates"
+FILENAMES=$(echo $FILENAMES)  # removes newlines from FILENAMES
 EXT=.ttl.bz2
 
 base=${1:-$(pwd)/dbpedia}
@@ -31,6 +39,11 @@ do
 	for filename in $FILENAMES
 	do
 		filename="${filename}_$lang$EXT"
+		if [[ "$filename" == *"_en_uris_en$EXT" ]]
+		then
+			continue
+		fi
+
 		file="$lang_dir/$filename"
 		if [ ! -e "$file" ]
 		then

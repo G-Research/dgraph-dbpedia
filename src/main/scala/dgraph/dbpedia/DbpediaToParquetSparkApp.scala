@@ -40,7 +40,7 @@ object DbpediaToParquetSparkApp {
     val base = args(0)
     val release = args(1)
     val dataset = "core-i18n"
-    val languages = if (args.length >= 3) args(2).split(",").toSeq else getLanguages(base, release, dataset)
+    val languages = if (args.length >= 3 && args(2).length > 0) args(2).split(",").toSeq else getLanguages(base, release, dataset)
     val filenames = if (args.length == 4) args(3).split(",").toSeq else getDatasets(base, release, dataset)
     val extension = ".ttl"
 
@@ -58,18 +58,27 @@ object DbpediaToParquetSparkApp {
         .master("local[*]")
         .appName("Spark Dgraph DBpedia App")
         .config("spark.local.dir", ".")
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.ui.showConsoleProgress", "false")
         .getOrCreate()
     import spark.implicits._
 
-    // turn all supported files into parquet
+    // turn all files into parquet
     val dfs = filenames.map { filename =>
       val parquet = s"$base/$release/$dataset/${filename}.parquet"
 
-      // for each langage, read the ttl file and add the `lang` column
-      languages.map(lang =>
-        readTtl(s"$base/$release/$dataset/$lang/${filename}_$lang$extension")
-          .withColumn("lang", lit(lang))
-      )
+      // for each language, read the ttl file and add the `lang` column
+      // also read the en_uris dataset (if it exists)
+      languages.map { lang =>
+        val path = s"$base/$release/$dataset/$lang/${filename}_$lang$extension"
+        val enUrisPath = s"$base/$release/$dataset/$lang/${filename}_en_uris_$lang$extension"
+
+        readTtl(path).withColumn("lang", lit(lang))
+          .when(languages.contains("en") && new File(enUrisPath).exists())
+          .call(_.unionByName(
+            readTtl(enUrisPath).withColumn("lang", concat(lit("en-"), lit(lang)))
+          ))
+      }
         // union all ttl files
         .reduce(_.unionByName(_))
         // write all data partitioned by language `lang` and sorted by `s`, `p` and `o`
@@ -92,7 +101,7 @@ object DbpediaToParquetSparkApp {
     println()
 
     // print overall statistics
-    val df = dfs.reduce(_.union(_))
+    val df = dfs.foldLeft(spark.emptyDataset[Triple].withColumn("lang", lit("")))(_.union(_))
     println(f"all: ${df.count}%,d triples, ${df.select($"s").distinct().count}%,d nodes, ${df.select($"p").distinct().count}%,d predicates")
     val duration = (System.nanoTime() - start) / 1000000000
     println(s"finished in ${duration / 3600}h ${(duration / 60) % 60}m ${duration % 60}s")
@@ -101,24 +110,28 @@ object DbpediaToParquetSparkApp {
   }
 
   def getLanguages(base: String, release: String, dataset: String): Seq[String] =
-    new File(new File(new File(base), release), dataset)
-      .listFiles().toSeq
+    Option(new File(new File(new File(base), release), dataset).listFiles())
+      .map(_.toSeq)
+      .getOrElse(Seq.empty)
       .filter(_.isDirectory)
       .map(_.getName)
       .filter(n => n.length == 2 || n.length == 3)
 
-  def getDatasets(base: String, release: String, dataset: String): Seq[String] =
-    new File(new File(new File(base), release), dataset)
-      .listFiles().toSeq
+  def getDatasets(base: String, release: String, dataset: String): Seq[String] = {
+    Option(new File(new File(new File(base), release), dataset).listFiles())
+      .map(_.toSeq)
+      .getOrElse(Seq.empty)
       .filter(_.isDirectory)
       .filter(n => n.getName.length == 2 || n.getName.length == 3)
       .flatMap(_.listFiles())
-      .filter(_.isFile)
+      .filter(f => Option(f).exists(_.isFile))
       .map(_.getName)
       .filter(_.endsWith(".ttl"))
       .map(n => n.substring(0, n.lastIndexOf("_")))
+      .filter(!_.endsWith("_en_uris"))
       .distinct
       .sorted
+  }
 
   def readTtl(paths: String*)(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._

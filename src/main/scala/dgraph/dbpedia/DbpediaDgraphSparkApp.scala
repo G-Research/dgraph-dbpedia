@@ -41,7 +41,8 @@ object DbpediaDgraphSparkApp {
     val base = args(0)
     val release = args(1)
     val dataset = "core-i18n"
-    val languages = if (args.length == 3) Some(args(2).split(",").toSeq) else None
+    val languages = if (args.length == 3) getLanguages(args(2)) else None
+    val writeTypes = false  // this is very expensive, only do if you need it
     val externaliseUris = false
     val removeLanguageTags = false
     // set to None to get all infobox properties, or Some(100) to get top 100 infobox properties
@@ -50,6 +51,8 @@ object DbpediaDgraphSparkApp {
 
     println(s"Pre-processing release $release of $dataset")
     println(s"Pre-processing these languages: ${languages.map(_.mkString(", ")).getOrElse("all")}")
+    if (writeTypes)
+      println("Writing type information")
     if (externaliseUris)
       println("URIs will be externalized")
     if (removeLanguageTags)
@@ -89,19 +92,35 @@ object DbpediaDgraphSparkApp {
     val blank = (c: String) => concat(lit("_:"), md5(col(c))).as(c)
     val removeLangTag = regexp_replace(col("o"), "@[a-z]+$", "").as("o")
 
+    // we look at the object dbpedia urls, en links may not contain the language code in the url,
+    // but we expect `dbpedia` at its place, so with `en` in languages, we also look for links with `dbpedia`
+    def getObjectLanguages(allLanguages: Dataset[String]): Seq[String] =
+      languages
+        .orElse(Some(allLanguages.collect().toSeq))
+        .map(l => l ++ (if (l.contains("en")) Seq("dbpedia") else Seq.empty[String]))
+        .get
+
     // load files from parquet, only these datasets are being pre-processed
     val path = s"$base/$release/$dataset"
     val labelTriples = readParquet(path, "labels", languages)
     val allInfoboxTriples = readParquet(path, "infobox_properties", languages)
-    val interlangTriples = readParquet(path, "interlanguage_links", languages)
+    val allInterlangTriples = readParquet(path, "interlanguage_links", languages)
+    // we are only interested in links inside our set of languages
+    val objectLangs = getObjectLanguages(allInterlangTriples.select($"lang").distinct.as[String])
+
+    // these are deterministic, but marking them non-deterministic guarantees they are executed only once per row
+    val getNodeLangUdf = udf((uri: String) => uri.split("\\.")(0).substring(8)).asNondeterministic()
+
+    val interlangTriples = allInterlangTriples.where(getNodeLangUdf($"o").isin(objectLangs: _*))
     val pageLinksTriples = readParquet(path, "page_links", languages)
     val categoryTriples = readParquet(path, "article_categories", languages)
     val skosTriples = readParquet(path, "skos_categories", languages)
-    val geoTriples = readParquet(path, "geo_coordinates", languages)
+    // we derive geo values from one predicate only
+    val geoTriples = readParquet(path, "geo_coordinates", languages).where($"p" === "<http://www.georss.org/georss/point>")
     val infoboxTriples = topInfoboxPropertiesPerLang.foldLeft(allInfoboxTriples){ case (triples, topk) =>
-      // get the top-k most frequent properties per language
+      // get the top-k most frequent properties per language (ignore en-* languages)
       val topkProperties =
-        triples
+        triples.where(!$"lang".contains("-"))
           .groupBy($"p", $"lang").count()
           .withColumn("k", row_number() over Window.partitionBy($"lang").orderBy($"count".desc, $"p"))
           .where($"k" <= topk)
@@ -109,8 +128,10 @@ object DbpediaDgraphSparkApp {
           .cache()
 
       // filter triples for top-k most frequent properties per language
+      // take top-k en properties from en-{lang} datasets
       triples
-        .join(topkProperties, Seq("p", "lang"), "left_semi")
+        .withColumn("node-lang", when($"lang".contains("-"), "en").otherwise($"lang"))
+        .join(topkProperties.withColumn("node-lang", $"lang"), Seq("p", "node-lang"), "left_semi")
         .as[Triple]
     }
 
@@ -118,12 +139,12 @@ object DbpediaDgraphSparkApp {
     if (printStats) {
       val stats = Seq(
         "labels" -> labelTriples,
-        "infobox_properties" -> allInfoboxTriples,
         "interlanguage_links" -> interlangTriples,
         "page_links" -> pageLinksTriples,
         "article_categories" -> categoryTriples,
         "skos_categories" -> skosTriples,
-        "geo_coordinates" -> geoTriples
+        "geo_coordinates" -> geoTriples,
+        "infobox_properties" -> allInfoboxTriples
       ) ++ topInfoboxPropertiesPerLang.map(topK =>
         Seq(s"top $topK infobox_properties" -> infoboxTriples)
       ).getOrElse(Seq.empty[(String, DataFrame)])
@@ -133,10 +154,27 @@ object DbpediaDgraphSparkApp {
         println(f"$label: ${df.count}%,d triples, ${df.select($"s").distinct().count}%,d nodes, ${df.select($"p").distinct().count}%,d predicates")
         df.groupBy($"lang").count.withColumnRenamed("count", label)
       }.foldLeft(Seq.empty[String].toDF("lang")) { case (f, df) => f.join(df, Seq("lang"), "full_outer") }
+        .cache
       println()
 
       println("Triples per languages and dataset:")
-      langStats.orderBy($"lang").show(1000, false)
+      // print all languages and aggregate all en-* langs
+      langStats
+        .where(!$"lang".startsWith("en-"))
+        .union(
+          langStats
+            .where($"lang".startsWith("en-"))
+            .withColumn("lang", lit("en-*"))
+            .groupBy($"lang")
+            .sum()
+        )
+        .orderBy($"lang")
+        .show(1000, false)
+      // print all en-* langs
+      langStats
+        .where($"lang".startsWith("en-"))
+        .orderBy($"lang")
+        .show(1000, false)
     }
 
     // define labels without language tag (if removeLanguageTags is true)
@@ -183,17 +221,8 @@ object DbpediaDgraphSparkApp {
         .select($"s", $"p", when($"t" === "<uri>", $"v").otherwise(concat($"v", lit("^^"), $"t")).as("o"), $"lang")
 
     // interlanguage links preprocessing
-    // we are only interested in links inside our set of languages
-    // we look at the dbpedia urls, en links may not contain the language code in the url,
-    // but we expect `db` at its place, so with `en` in languages, we also look for links with `db`
-    val langs =
-      languages
-        .orElse(Some(interlangTriples.select($"lang").distinct.as[String].collect().toSeq))
-        .map(l => l ++ (if (l.contains("en")) Seq("db") else Seq.empty[String]))
-        .get
     val interlang =
       interlangTriples
-        .where($"o".substr(9, 2).isin(langs: _*))
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
@@ -219,7 +248,6 @@ object DbpediaDgraphSparkApp {
     // geo_coordinates
     val geoCoordinates =
       geoTriples
-        .where($"p" === "<http://www.georss.org/georss/point>")
         .withColumn("point", regexp_replace($"o", "\"", ""))
         .withColumn("coordinates", split($"point", " ").cast(ArrayType(FloatType)))
         .withColumn("json", to_json(struct(lit("Point").as("type"), $"coordinates")))
@@ -261,32 +289,34 @@ object DbpediaDgraphSparkApp {
       Seq(
         Seq(
           // labels dataset has a single predicate
-          ("<http://www.w3.org/2000/01/rdf-schema#label>", "any", s"string${lang}", "@index(fulltext)"),
+          ("labels", "<http://www.w3.org/2000/01/rdf-schema#label>", "any", s"string${lang}", "@index(fulltext)"),
 
           // categories dataset has a single predicate
-          ("<http://purl.org/dc/terms/subject>", "any", "[uid]", "@reverse"),
+          ("article_categories", "<http://purl.org/dc/terms/subject>", "any", "[uid]", "@reverse"),
 
           // skos categories has these four predicates
-          ("<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>", "any", "uid", "@reverse"),
-          ("<http://www.w3.org/2004/02/skos/core#prefLabel>", "any", s"string${lang}", "@index(fulltext)"),
-          ("<http://www.w3.org/2004/02/skos/core#related>", "any", "[uid]", "@reverse"),
-          ("<http://www.w3.org/2004/02/skos/core#broader>", "any", "[uid]", "@reverse"),
+          ("skos_categories", "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>", "any", "uid", "@reverse"),
+          ("skos_categories", "<http://www.w3.org/2004/02/skos/core#prefLabel>", "any", s"string${lang}", "@index(fulltext)"),
+          ("skos_categories", "<http://www.w3.org/2004/02/skos/core#related>", "any", "[uid]", "@reverse"),
+          ("skos_categories", "<http://www.w3.org/2004/02/skos/core#broader>", "any", "[uid]", "@reverse"),
 
           // interlanguage links dataset has a single predicate
-          ("<http://www.w3.org/2002/07/owl#sameAs>", "any", "[uid]", "@reverse"),
+          ("interlanguage_links", "<http://www.w3.org/2002/07/owl#sameAs>", "any", "[uid]", "@reverse"),
 
           // page links has this predicate
-          ("<http://dbpedia.org/ontology/wikiPageWikiLink>", "any", "[uid]", "@reverse"),
+          ("page_links", "<http://dbpedia.org/ontology/wikiPageWikiLink>", "any", "[uid]", "@reverse"),
 
           // geo coordinates dataset has this predicate
-          ("<http://www.georss.org/georss/point>", "any", "geo", "@index(geo)")
-        ).toDF("p", "lang", "t", "i"),
+          ("geo_coordinates", "<http://www.georss.org/georss/point>", "any", "geo", "@index(geo)")
+        ).toDF("dataset", "p", "lang", "t", "i"),
 
         // infobox properties data type and index depends on their data type `t`
+        // infobox properties from en-* languages have en properties
         infoboxTriples
           .join(infoboxPropertyDataType, "p")
           .withColumn("t", dgraphDataTypesUdf($"t"))
-          .select($"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i"))
+          .withColumn("lang", when($"lang".contains("-"), "en").otherwise($"lang"))
+          .select(lit("infobox_properties").as("dataset"), $"p", $"lang", $"t", dgraphIndicesUdf($"t").as("i"))
           .distinct(),
       ).reduce(_.unionByName(_))
         .distinct()
@@ -296,74 +326,50 @@ object DbpediaDgraphSparkApp {
         .coalesce(1)
 
     // write schema without indices
-    println("writing schema.dgraph")
+    val schemaPath = s"$base/$release/$dataset/schema.dgraph"
+    print(s"writing $schemaPath")
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
+      .writePartitionedBy(Seq("dataset", "lang"), Seq("p"), Seq.empty,
         // turn columns into schema line: "$p: $t $i .",
         // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
-        _.select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"lang")
+        _.select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"dataset", $"lang")
       )
       .mode(SaveMode.Overwrite)
-      .text(s"$base/$release/$dataset/schema.dgraph")
+      .text(schemaPath)
+    if (printStats)
+      print(f": ${spark.read.text(schemaPath).count()}%,d lines")
+    println
 
     // write schema with indices
-    println("writing schema.indexed.dgraph")
+    val schemaIndexedPath = s"$base/$release/$dataset/schema.indexed.dgraph"
+    print(s"writing $schemaIndexedPath")
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .writePartitionedBy(Seq("lang"), Seq("p"), Seq.empty,
+      .writePartitionedBy(Seq("dataset", "lang"), Seq("p"), Seq.empty,
         // turn columns into schema line: "$p: $t $i .",
         // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
-        _.select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"lang")
+        _.select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"dataset", $"lang")
       )
       .mode(SaveMode.Overwrite)
-      .text(s"$base/$release/$dataset/schema.indexed.dgraph")
-
-    // get all types from the datasets
-    val articlesTypes =
-      Seq(
-        labelTriples.select($"s", $"lang"),
-        infoboxTriples.select($"s", $"lang"),
-        interlangTriples.select($"s", $"lang").where($"o".substr(9, 2).isin(langs: _*)),
-        interlangTriples.select($"o".as("s"), $"lang").where($"o".substr(9, 2).isin(langs: _*)),
-        pageLinksTriples.select($"s", $"lang"),
-        categoryTriples.select($"s", $"lang"),
-        geoTriples.select($"s", $"lang")
-      )
-        .map(_.distinct())
-        .reduce(_.unionByName(_))
-        .withColumn("p", lit("<dgraph.type>"))
-        .withColumn("o", lit("\"Article\""))
-    val categoryTypes =
-      categoryTriples
-        .select($"o".as("s"), $"lang").distinct()
-        .withColumn("p", lit("<dgraph.type>"))
-        .withColumn("o", lit("\"Category\""))
-    val skosTypes =
-      skosTriples
-        .select($"s", $"lang")
-        .withColumn("p", lit("<dgraph.type>"))
-        .withColumn("o", lit("\"Concept\""))
-    val types =
-      articlesTypes
-        .unionByName(categoryTypes)
-        .unionByName(skosTypes)
-        .distinct()
-        .when(externaliseUris).call(_.withColumn("s", blank("s")))
+      .text(schemaIndexedPath)
+    if (printStats)
+      print(f": ${spark.read.text(schemaIndexedPath).count()}%,d lines")
+    println
 
     val externalIds =
       Seq(
         labelTriples.select($"s", $"lang"),
         infoboxTriples.select($"s", $"lang"),
-        interlangTriples.select($"s", $"lang").where($"o".substr(9, 2).isin(langs: _*)),
-        interlangTriples.select($"o".as("s"), $"lang").where($"o".substr(9, 2).isin(langs: _*)),
+        interlangTriples.select($"s", $"lang"),
+        interlangTriples.select($"o".as("s"), $"lang"),
         pageLinksTriples.select($"s", $"lang"),
         pageLinksTriples.select($"o".as("s"), $"lang"),
         categoryTriples.select($"s", $"lang"),
         categoryTriples.select($"o".as("s"), $"lang"),
-        skosTriples.select($"s", $"lang").where($"p".isin("<http://www.w3.org/2004/02/skos/core#related>", "<http://www.w3.org/2004/02/skos/core#broader>")),
+        skosTriples.select($"s", $"lang"),
         skosTriples.select($"o".as("s"), $"lang").where($"p".isin("<http://www.w3.org/2004/02/skos/core#related>", "<http://www.w3.org/2004/02/skos/core#broader>")),
         // skosTriples contains this rdf type, externalize it as well
         Seq(("<http://www.w3.org/2004/02/skos/core#Concept>", "any")).toDF("s", "lang"),
@@ -380,19 +386,54 @@ object DbpediaDgraphSparkApp {
         )
 
     // write dgraph rdf files
-    writeRdf(labels, s"$base/$release/$dataset/labels.rdf")
-    writeRdf(infobox, s"$base/$release/$dataset/infobox_properties.rdf")
-    writeRdf(interlang.toDF, s"$base/$release/$dataset/interlanguage_links.rdf")
-    writeRdf(pageLinks.toDF, s"$base/$release/$dataset/page_links.rdf")
-    writeRdf(categories.toDF, s"$base/$release/$dataset/article_categories.rdf")
-    writeRdf(skosCategories.toDF, s"$base/$release/$dataset/skos_categories.rdf")
-    writeRdf(geoCoordinates.toDF, s"$base/$release/$dataset/geo_coordinates.rdf")
-    writeRdf(types.toDF, s"$base/$release/$dataset/types.rdf")
+    val labelsRdf = writeRdf(labels, s"$base/$release/$dataset/labels.rdf", printStats)
+    val infoboxRdf = writeRdf(infobox, s"$base/$release/$dataset/infobox_properties.rdf", printStats)
+    val interlangRdf = writeRdf(interlang.toDF, s"$base/$release/$dataset/interlanguage_links.rdf", printStats)
+    val pageLinksRdf = writeRdf(pageLinks.toDF, s"$base/$release/$dataset/page_links.rdf", printStats)
+    val categoryRdf = writeRdf(categories.toDF, s"$base/$release/$dataset/article_categories.rdf", printStats)
+    val skosRdf = writeRdf(skosCategories.toDF, s"$base/$release/$dataset/skos_categories.rdf", printStats)
+    val geoRdf = writeRdf(geoCoordinates.toDF, s"$base/$release/$dataset/geo_coordinates.rdf", printStats)
+
+    if (writeTypes) {
+      // get all types from the rdf files
+      val articlesTypes =
+        Seq(
+          labelsRdf.select($"s", $"lang"),
+          infoboxRdf.select($"s", $"lang"),
+          interlangRdf.select($"s", $"lang"),
+          interlangRdf.select($"o".as("s"), $"lang"),
+          pageLinksRdf.select($"s", $"lang"),
+          categoryRdf.select($"s", $"lang"),
+          geoRdf.select($"s", $"lang")
+        )
+          .map(_.distinct())
+          .reduce(_.unionByName(_))
+          .withColumn("p", lit("<dgraph.type>"))
+          .withColumn("o", lit("\"Article\""))
+      val categoryTypes =
+        categoryRdf
+          .select($"o".as("s"), $"lang").distinct()
+          .withColumn("p", lit("<dgraph.type>"))
+          .withColumn("o", lit("\"Category\""))
+      val skosTypes =
+        skosRdf
+          .select($"s", $"lang")
+          .withColumn("p", lit("<dgraph.type>"))
+          .withColumn("o", lit("\"Concept\""))
+      val types =
+        // no need to externalise the uris here, we read them from parquet, they are externalised already
+        articlesTypes
+          .unionByName(categoryTypes)
+          .unionByName(skosTypes)
+          .distinct()
+      writeRdf(types.toDF, s"$base/$release/$dataset/types.rdf", printStats)
+    }
+
     if (externaliseUris)
-      writeRdf(externalIds.toDF, s"$base/$release/$dataset/external_ids.rdf")
+      writeRdf(externalIds.toDF, s"$base/$release/$dataset/external_ids.rdf", printStats)
+
     println()
 
-    val infoboxRdf = spark.read.text(s"$base/$release/$dataset/infobox_properties.rdf")
     println(s"cleaned-up infoboxes cover ${infoboxRdf.count() * 100 / math.max(infoboxTriples.count(), 1)}% of original rows")
     println(s"memory spill: ${memSpilled.get() / 1024/1024/1024} GB  disk spill: ${diskSpilled.get() / 1024/1024/1024} GB  peak mem per host: ${peakMem.get() / 1024/1024} MB")
     val duration = (System.nanoTime() - start) / 1000000000
@@ -401,19 +442,29 @@ object DbpediaDgraphSparkApp {
     spark.stop()
   }
 
-  def getLanguages(base: String, release: String, dataset: String): Seq[String] =
-    new File(new File(new File(base), release), dataset)
-      .listFiles().toSeq
-      .filter(_.isDirectory)
-      .filter(_.getName.endsWith(".parquet"))
-      .flatMap(_.listFiles())
-      .filter(f => f.isDirectory && f.getName.startsWith("lang="))
-      .map(_.getName.substring(5))
-      .distinct
+  def getLanguages(langs: String): Option[Seq[String]] = {
+    val languages =
+      Some(langs.split(",").toSeq.filter(_.nonEmpty))
+        .filter(_.nonEmpty)
+
+    languages
+      .map(ls =>
+        Some(ls)
+          .filter(_.contains("en"))
+          .getOrElse(Seq.empty)
+          .filterNot(_.equals("en"))
+          .map(l => s"en-$l")
+          ++ ls
+      )
+      .map(_.sorted)
+  }
 
   def readParquet(path: String, dataset: String, languages: Option[Seq[String]])(implicit spark: SparkSession): Dataset[Triple] = {
     import spark.implicits._
-    readParquet(s"$path/${dataset}.parquet").when(languages.isDefined).call(_.where($"lang".isin(languages.get: _*))).as[Triple]
+    readParquet(s"$path/${dataset}.parquet")
+      .when(languages.isDefined)
+      .call(_.where($"lang".isin(languages.get: _*)))
+      .as[Triple]
   }
 
   def readParquet(path: String)(implicit spark: SparkSession): Dataset[Triple] = {
@@ -425,10 +476,10 @@ object DbpediaDgraphSparkApp {
       spark.emptyDataset[Triple].withColumn("lang", lit("")).as[Triple]
   }
 
-  def writeRdf(df: DataFrame, path: String)(implicit spark: SparkSession): Unit = {
+  def writeRdf(df: DataFrame, path: String, printStats: Boolean)(implicit spark: SparkSession): DataFrame = {
     import spark.implicits._
 
-    println(s"writing $path")
+    print(s"writing $path")
 
     df
       // @ and ~ not allowed in predicates in Dgraph
@@ -449,6 +500,25 @@ object DbpediaDgraphSparkApp {
       .mode(SaveMode.Overwrite)
       // write as text to `path`
       .text(path)
+
+    if (printStats)
+      print(f": ${spark.read.text(path).count()}%,d triples")
+    println
+
+    readRdf(path)
+  }
+
+  def readRdf(paths: String*)(implicit spark: SparkSession): DataFrame = {
+    import spark.implicits._
+
+    spark
+      // read the rdf file as a text file
+      .read.text(paths: _*).as[(String, String)]
+      // remove the last two characters (' .') from the ttl lines
+      // and split at the first two spaces (three columns: subject, predicate, object)
+      .map{ case (triple, lang) => (triple.dropRight(2).split(" ", 3), lang) }
+      // get the three columns `s`, `p` and `o`, and `lang`
+      .select($"_1"(0).as("s"), $"_1"(1).as("p"), $"_1"(2).as("o"), $"_2".as("lang"))
   }
 
   def extractDataType(value: String): Array[String] = {

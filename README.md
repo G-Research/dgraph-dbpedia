@@ -297,6 +297,18 @@ Result:
       }
     }
 
+Query for things in Berlin, Germany:
+
+    {
+      query(func: near(<http://www.georss.org/georss/point>, [13.41053, 52.52437], 1000), first: 1000) {
+        uid
+        name: <http://www.w3.org/2000/01/rdf-schema#label>@*
+        location: <http://www.georss.org/georss/point>
+      }
+    }
+
+![Geo query result](geo-query.png "Dgraph metrics as shown on Spark UI Stages page")
+
 ## Statistics
 
 ### Dataset Statistics

@@ -17,7 +17,7 @@ Dgraph organizes the graph around predicates, so that dataset should contain pre
 - a predicate that links a **deep network** of nodes
 - a predicate that links **strongly connected components**
 - a predicate with a lot of data, ideally a long string that exists for **every** node and with **multiple** languages
-- a predicate with geo coordinates
+- a predicate with **geo coordinates**
 - numerous predicates, to have a **large** schema
 - a **long-tail** predicate frequency distribution:
   a few predicates have high frequency (and low selectivity),
@@ -63,7 +63,7 @@ This tutorial uses the following datasets from [DBpedia project](https://wiki.db
 |--------------------|--------------------------------|-----------|
 |labels              |`labels_{lang}.ttl`             |Each article has a single title in the article's language.|
 |category            |`article_categories_{lang}.ttl` |Some articles link to categories, multiple categories allowed.|
-|skos                |`skos_categories_{lang}.ttl`    |Categories link to broader categories, forming a hierarchy. Forms a category hierarchy.|
+|skos                |`skos_categories_{lang}.ttl`    |Categories link to broader categories. Forms a deep hierarchy.|
 |inter-language links|`interlanguage_links_{lang}.ttl`|Articles link to the same article in all other languages. Forms strongly connected components.|
 |page links          |`page_links_{lang}.ttl`         |Articles link to other articles or other resources. Forms a network of articles.|
 |infobox             |`infobox_properties_{lang}.ttl` |Some articles have infoboxes. Provides structured information as key-value tables.|

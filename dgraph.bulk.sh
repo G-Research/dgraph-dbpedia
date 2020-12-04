@@ -13,4 +13,5 @@ schema=$3
 
 mkdir -p $bulk
 cp dgraph.bulk.load.sh $bulk/
-docker run --rm -it -v "$data:/data" -v "$bulk:/dgraph" dgraph/dgraph:v20.07.1 /dgraph/dgraph.bulk.load.sh "$schema" "${@:4}"
+docker run --rm -it -v "$data:/data" -v "$bulk:/dgraph" dgraph/dgraph:v20.11.0-rc1-142-g79f6e8edc /dgraph/dgraph.bulk.load.sh "$schema" "${@:4}"
+

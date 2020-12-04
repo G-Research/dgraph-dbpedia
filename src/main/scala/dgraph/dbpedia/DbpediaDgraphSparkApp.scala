@@ -15,15 +15,15 @@
  */
 package dgraph.dbpedia
 
-import java.io.File
-import java.util.concurrent.atomic.AtomicLong
-
 import dgraph.dbpedia.Helpers.ExtendedDataFrame
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, FloatType}
-import org.apache.spark.sql.{DataFrame, Dataset, SaveMode, SparkSession}
+import org.apache.spark.sql._
+
+import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 object DbpediaDgraphSparkApp {
 
@@ -245,18 +245,21 @@ object DbpediaDgraphSparkApp {
         .when(externaliseUris).call(_.withColumn("o", when($"p" === "<http://www.w3.org/2004/02/skos/core#prefLabel>", $"o").otherwise(blank("o"))))
         .when(removeLanguageTags).call(_.withColumn("o", when($"p" === "<http://www.w3.org/2004/02/skos/core#prefLabel>", removeLangTag).otherwise($"o")))
 
+    def swap(column: Column): Column = array(column(1), column(0))
+
     // geo_coordinates
     val geoCoordinates =
       geoTriples
         .withColumn("point", regexp_replace($"o", "\"", ""))
-        .withColumn("coordinates", split($"point", " ").cast(ArrayType(FloatType)))
+        // we need to swap the coordinates, the dbpedia dataset uses latitude/longitude, dgraph uses longitude/latitude order
+        .withColumn("coordinates", swap(split($"point", " ").cast(ArrayType(FloatType))))
         .withColumn("json", to_json(struct(lit("Point").as("type"), $"coordinates")))
         .withColumn("o", regexp_replace($"json", "\"", "\\\\\""))
         .withColumn("o", concat(lit("\""), $"o", lit("\"^^<geo:geojson>")))
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
 
     // xid predicate
-    val xid = Seq(("<xid>", "any", "string", "@index(exact)")).toDF("p", "lang", "t", "i")
+    val xid = Seq(("external_ids", "<xid>", "any", "string", "@index(exact)")).toDF("dataset", "p", "lang", "t", "i")
 
     // mapping to Dgraph types
     val dgraphDataTypes = Map(
@@ -481,44 +484,51 @@ object DbpediaDgraphSparkApp {
 
     print(s"writing $path")
 
-    df
-      // @ and ~ not allowed in predicates in Dgraph
-      .where(!$"p".contains("@") && !$"p".contains("~"))
-      // with this partitioning you get few partition files for small languages and more files for large languages
-      // partition files are mostly even sized
-      // partition files will be sorted by all given columns
-      .writePartitionedBy(
-        Seq("lang"),    // there is a lang=… sub-directory in `path` for each language
-        Seq("p", "s"),  // all rows for one predicate and subject are contained in a one part-… file
-        Seq("o"),       // the part-… files in the sub-directories are sorted by `p`, `s` and `o`
-        // we don't want all columns of `df` to be stored in `path`, only these columns
-        _.select(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang")
-      )
-      // gzip the partitions
-      .option("compression", "gzip")
-      // overwrite `path` completely, if it exists
-      .mode(SaveMode.Overwrite)
-      // write as text to `path`
-      .text(path)
+    if (!df.isEmpty) {
+      df
+        // @ and ~ not allowed in predicates in Dgraph
+        .where(!$"p".contains("@") && !$"p".contains("~"))
+        // with this partitioning you get few partition files for small languages and more files for large languages
+        // partition files are mostly even sized
+        // partition files will be sorted by all given columns
+        .writePartitionedBy(
+          Seq("lang"),    // there is a lang=… sub-directory in `path` for each language
+          Seq("p", "s"),  // all rows for one predicate and subject are contained in a one part-… file
+          Seq("o"),       // the part-… files in the sub-directories are sorted by `p`, `s` and `o`
+          // we don't want all columns of `df` to be stored in `path`, only these columns
+          _.select(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang")
+        )
+        // gzip the partitions
+        .option("compression", "gzip")
+        // overwrite `path` completely, if it exists
+        .mode(SaveMode.Overwrite)
+        // write as text to `path`
+        .text(path)
 
-    if (printStats)
-      print(f": ${spark.read.text(path).count()}%,d triples")
+      if (printStats)
+        print(f": ${spark.read.text(path).count()}%,d triples")
+    }
     println
 
     readRdf(path)
   }
 
-  def readRdf(paths: String*)(implicit spark: SparkSession): DataFrame = {
+  def readRdf(path: String)(implicit spark: SparkSession): DataFrame = {
     import spark.implicits._
 
-    spark
+    if(new File(path).exists())
+      spark
       // read the rdf file as a text file
-      .read.text(paths: _*).as[(String, String)]
+      .read.text(path).as[(String, String)]
       // remove the last two characters (' .') from the ttl lines
       // and split at the first two spaces (three columns: subject, predicate, object)
       .map{ case (triple, lang) => (triple.dropRight(2).split(" ", 3), lang) }
       // get the three columns `s`, `p` and `o`, and `lang`
       .select($"_1"(0).as("s"), $"_1"(1).as("p"), $"_1"(2).as("o"), $"_2".as("lang"))
+    else
+      spark
+        .emptyDataset[Triple]
+        .withColumn("lang", lit(""))
   }
 
   def extractDataType(value: String): Array[String] = {

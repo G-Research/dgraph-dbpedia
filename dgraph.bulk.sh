@@ -7,9 +7,9 @@ then
 	exit 1
 fi
 
-data=$1
-bulk=$2
-schema=$3
+data=$(cd "$1"; pwd)
+bulk=$(cd "$2"; pwd)
+schema=$(cd "$3"; pwd)
 
 mkdir -p $bulk
 cp dgraph.bulk.load.sh $bulk/

@@ -10,10 +10,10 @@ fi
 
 cd "$1"
 
-echo -e "Generated with https://github.com/EnricoMi/dgraph-dbpedia/tree/v2.1,\nderived from https://wiki.dbpedia.org/about and\nlicenced under https://creativecommons.org/licenses/by-sa/3.0/." > LICENCE.txt
+echo -e "Generated with https://github.com/EnricoMi/dgraph-dbpedia/tree/v2.2,\nderived from https://wiki.dbpedia.org/about and\nlicenced under https://creativecommons.org/licenses/by-sa/3.0/." > LICENCE.txt
 for rdf in *.rdf
 do
   echo -n "packaging $rdf"
-  zip -r -0 "dgraph-dbpedia-v2.1-$rdf.zip" LICENCE.txt "$rdf" | while read line; do echo -n .; done
+  zip -r -0 "dgraph-dbpedia-v2.2-$rdf.zip" LICENCE.txt "$rdf" | while read line; do echo -n .; done
   echo
 done

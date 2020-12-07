@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dgraph
+package uk.co.gresearch.dgraph
 
 package object dbpedia {
 

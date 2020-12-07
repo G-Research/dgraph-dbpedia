@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dgraph.dbpedia
+package uk.co.gresearch.dgraph.dbpedia
 
 import java.io.File
 
-import dgraph.dbpedia.Helpers.ExtendedDataFrame
+import uk.co.gresearch.dgraph.dbpedia.Helpers.ExtendedDataFrame
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{Dataset, SaveMode, SparkSession}
 

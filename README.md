@@ -52,7 +52,7 @@ Run the following command on an Ubuntu instance to get it setup:
     sudo apt update
     sudo apt install -y git maven parallel docker.io zip
     sudo usermod -aG docker ${USER}  # you may need run `sudo systemctl restart docker` and re-login for this to work
-    git clone https://github.com/EnricoMi/dgraph-dbpedia.git
+    git clone https://github.com/G-Research/dgraph-dbpedia.git
     cd dgraph-dbpedia
 
 ## Datasets
@@ -125,11 +125,11 @@ and produces [Dgraph compatible RDF triples](https://dgraph.io/docs/mutations/tr
 First we produce parquet files from all `ttl` files. All languages will be stored
 in one parquet directory per dataset, where languages can still be selected in later steps.
 
-    MAVEN_OPTS=-Xmx2g mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="dgraph.dbpedia.DbpediaToParquetSparkApp" -Dexec.args="dbpedia 2016-10"
+    MAVEN_OPTS=-Xmx2g mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="uk.co.gresearch.dgraph.dbpedia.DbpediaToParquetSparkApp" -Dexec.args="dbpedia 2016-10"
 
 Secondly, process these parquet files into RDF triple files:
 
-    MAVEN_OPTS=-Xmx8g mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="dgraph.dbpedia.DbpediaDgraphSparkApp" -Dexec.args="dbpedia 2016-10"
+    MAVEN_OPTS=-Xmx8g mvn compile exec:java -Dexec.cleanupDaemonThreads=false -Dexec.mainClass="uk.co.gresearch.dgraph.dbpedia.DbpediaDgraphSparkApp" -Dexec.args="dbpedia 2016-10"
 
 These commands can optionally be given a comma separated list of language codes: `-Dexec.args="dbpedia 2016-10 en,es,fr,de"`.
 Without those language codes, all languages will be processed.

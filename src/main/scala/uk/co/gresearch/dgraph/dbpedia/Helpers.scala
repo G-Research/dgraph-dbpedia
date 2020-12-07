@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dgraph.dbpedia
+package uk.co.gresearch.dgraph.dbpedia
 
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.{DataFrame, DataFrameWriter, Dataset, Row}

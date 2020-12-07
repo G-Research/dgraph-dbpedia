@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dgraph.dbpedia
+package uk.co.gresearch.dgraph.dbpedia
 
-import dgraph.dbpedia.Helpers.ExtendedDataFrame
+import uk.co.gresearch.dgraph.dbpedia.Helpers.ExtendedDataFrame
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._

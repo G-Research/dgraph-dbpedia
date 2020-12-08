@@ -15,12 +15,13 @@
  */
 package uk.co.gresearch.dgraph.dbpedia
 
-import uk.co.gresearch.dgraph.dbpedia.Helpers.ExtendedDataFrame
+import uk.co.gresearch.spark._
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, FloatType}
 import org.apache.spark.sql._
+import uk.co.gresearch.ExtendedTransformation
 
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
@@ -179,7 +180,7 @@ object DbpediaDgraphSparkApp {
 
     // define labels without language tag (if removeLanguageTags is true)
     val labels =
-      labelTriples
+      labelTriples.toDF
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(removeLanguageTags).call(_.withColumn("o", removeLangTag))
 
@@ -222,25 +223,25 @@ object DbpediaDgraphSparkApp {
 
     // interlanguage links preprocessing
     val interlang =
-      interlangTriples
+      interlangTriples.toDF
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
     // page_links
     val pageLinks =
-      pageLinksTriples
+      pageLinksTriples.toDF
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
     // article_categories
     val categories =
-      categoryTriples
+      categoryTriples.toDF
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
     // skos_categories
     val skosCategories =
-      skosTriples
+      skosTriples.toDF
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", when($"p" === "<http://www.w3.org/2004/02/skos/core#prefLabel>", $"o").otherwise(blank("o"))))
         .when(removeLanguageTags).call(_.withColumn("o", when($"p" === "<http://www.w3.org/2004/02/skos/core#prefLabel>", removeLangTag).otherwise($"o")))
@@ -334,10 +335,14 @@ object DbpediaDgraphSparkApp {
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .writePartitionedBy(Seq("dataset", "lang"), Seq("p"), Seq.empty,
+      .writePartitionedBy(
+        Seq($"dataset", $"lang"),
+        Seq($"p"),
+        Seq.empty,
+        None,
         // turn columns into schema line: "$p: $t $i .",
         // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
-        _.select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"dataset", $"lang")
+        Some(Seq(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"dataset", $"lang"))
       )
       .mode(SaveMode.Overwrite)
       .text(schemaPath)
@@ -351,10 +356,14 @@ object DbpediaDgraphSparkApp {
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .writePartitionedBy(Seq("dataset", "lang"), Seq("p"), Seq.empty,
+      .writePartitionedBy(
+        Seq($"dataset", $"lang"),
+        Seq($"p"),
+        Seq.empty,
+        None,
         // turn columns into schema line: "$p: $t $i .",
         // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
-        _.select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"dataset", $"lang")
+        Some(Seq(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"dataset", $"lang"))
       )
       .mode(SaveMode.Overwrite)
       .text(schemaIndexedPath)
@@ -492,11 +501,12 @@ object DbpediaDgraphSparkApp {
         // partition files are mostly even sized
         // partition files will be sorted by all given columns
         .writePartitionedBy(
-          Seq("lang"),    // there is a lang=… sub-directory in `path` for each language
-          Seq("p", "s"),  // all rows for one predicate and subject are contained in a one part-… file
-          Seq("o"),       // the part-… files in the sub-directories are sorted by `p`, `s` and `o`
+          Seq($"lang"),     // there is a lang=… sub-directory in `path` for each language
+          Seq($"p", $"s"),  // all rows for one predicate and subject are contained in a one part-… file
+          Seq($"o"),        // the part-… files in the sub-directories are sorted by `p`, `s` and `o`
+          None,
           // we don't want all columns of `df` to be stored in `path`, only these columns
-          _.select(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang")
+          Some(Seq(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang"))
         )
         // gzip the partitions
         .option("compression", "gzip")

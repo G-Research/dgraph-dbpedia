@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Enrico Minack
+ * Copyright 2020 G-Research
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package dgraph.dbpedia
+package uk.co.gresearch.dgraph.dbpedia
 
-import dgraph.dbpedia.Helpers.ExtendedDataFrame
+import uk.co.gresearch.dgraph.dbpedia.Helpers.ExtendedDataFrame
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._

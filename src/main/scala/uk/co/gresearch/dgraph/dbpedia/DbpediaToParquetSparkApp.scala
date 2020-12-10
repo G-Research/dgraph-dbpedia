@@ -17,8 +17,7 @@ package uk.co.gresearch.dgraph.dbpedia
 
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{Dataset, SaveMode, SparkSession}
-import uk.co.gresearch.ExtendedTransformation
-import uk.co.gresearch.spark.ExtendedDataFrame
+import uk.co.gresearch.spark._
 
 import java.io.File
 

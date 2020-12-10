@@ -21,7 +21,6 @@ import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, FloatType}
 import org.apache.spark.sql._
-import uk.co.gresearch.ExtendedTransformation
 
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
@@ -180,7 +179,7 @@ object DbpediaDgraphSparkApp {
 
     // define labels without language tag (if removeLanguageTags is true)
     val labels =
-      labelTriples.toDF
+      labelTriples
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(removeLanguageTags).call(_.withColumn("o", removeLangTag))
 
@@ -223,25 +222,25 @@ object DbpediaDgraphSparkApp {
 
     // interlanguage links preprocessing
     val interlang =
-      interlangTriples.toDF
+      interlangTriples
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
     // page_links
     val pageLinks =
-      pageLinksTriples.toDF
+      pageLinksTriples
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
     // article_categories
     val categories =
-      categoryTriples.toDF
+      categoryTriples
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", blank("o")))
 
     // skos_categories
     val skosCategories =
-      skosTriples.toDF
+      skosTriples
         .when(externaliseUris).call(_.withColumn("s", blank("s")))
         .when(externaliseUris).call(_.withColumn("o", when($"p" === "<http://www.w3.org/2004/02/skos/core#prefLabel>", $"o").otherwise(blank("o"))))
         .when(removeLanguageTags).call(_.withColumn("o", when($"p" === "<http://www.w3.org/2004/02/skos/core#prefLabel>", removeLangTag).otherwise($"o")))

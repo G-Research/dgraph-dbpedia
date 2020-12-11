@@ -15,7 +15,7 @@
  */
 package uk.co.gresearch.dgraph.dbpedia
 
-import uk.co.gresearch.dgraph.dbpedia.Helpers.ExtendedDataFrame
+import uk.co.gresearch.spark._
 import org.apache.spark.scheduler.{SparkListener, SparkListenerStageCompleted}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
@@ -334,10 +334,14 @@ object DbpediaDgraphSparkApp {
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .writePartitionedBy(Seq("dataset", "lang"), Seq("p"), Seq.empty,
+      .writePartitionedBy(
+        Seq($"dataset", $"lang"),
+        Seq($"p"),
+        Seq.empty,
+        None,
         // turn columns into schema line: "$p: $t $i .",
         // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
-        _.select(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"dataset", $"lang")
+        Some(Seq(concat($"p", lit(": "), $"t", lit(" .")).as("p"), $"dataset", $"lang"))
       )
       .mode(SaveMode.Overwrite)
       .text(schemaPath)
@@ -351,10 +355,14 @@ object DbpediaDgraphSparkApp {
     predicates
       // @ and ~ not allowed in predicates in Dgraph
       .where(!$"p".contains("@") && !$"p".contains("~"))
-      .writePartitionedBy(Seq("dataset", "lang"), Seq("p"), Seq.empty,
+      .writePartitionedBy(
+        Seq($"dataset", $"lang"),
+        Seq($"p"),
+        Seq.empty,
+        None,
         // turn columns into schema line: "$p: $t $i .",
         // e.g. "<http://de.dbpedia.org/property/typ>: string @index(fulltext) ."
-        _.select(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"dataset", $"lang")
+        Some(Seq(concat($"p", lit(": "), $"t", lit(" "), $"i", lit(" .")).as("p"), $"dataset", $"lang"))
       )
       .mode(SaveMode.Overwrite)
       .text(schemaIndexedPath)
@@ -492,11 +500,12 @@ object DbpediaDgraphSparkApp {
         // partition files are mostly even sized
         // partition files will be sorted by all given columns
         .writePartitionedBy(
-          Seq("lang"),    // there is a lang=… sub-directory in `path` for each language
-          Seq("p", "s"),  // all rows for one predicate and subject are contained in a one part-… file
-          Seq("o"),       // the part-… files in the sub-directories are sorted by `p`, `s` and `o`
+          Seq($"lang"),     // there is a lang=… sub-directory in `path` for each language
+          Seq($"p", $"s"),  // all rows for one predicate and subject are contained in a one part-… file
+          Seq($"o"),        // the part-… files in the sub-directories are sorted by `p`, `s` and `o`
+          None,
           // we don't want all columns of `df` to be stored in `path`, only these columns
-          _.select(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang")
+          Some(Seq(concat($"s", lit(" "), $"p", lit(" "), $"o", lit(" .")), $"lang"))
         )
         // gzip the partitions
         .option("compression", "gzip")

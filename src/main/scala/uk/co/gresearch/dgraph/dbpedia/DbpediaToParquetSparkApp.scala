@@ -15,11 +15,11 @@
  */
 package uk.co.gresearch.dgraph.dbpedia
 
-import java.io.File
-
-import uk.co.gresearch.dgraph.dbpedia.Helpers.ExtendedDataFrame
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{Dataset, SaveMode, SparkSession}
+import uk.co.gresearch.spark._
+
+import java.io.File
 
 object DbpediaToParquetSparkApp {
 
@@ -86,9 +86,9 @@ object DbpediaToParquetSparkApp {
         // partition files are mostly even sized
         // partition files will be sorted by all given columns
         .writePartitionedBy(
-          Seq("lang"),   // there is a lang=… sub-directory in `path` for each language
-          Seq("s"),      // all rows for one subject is contained in a single part-… file
-          Seq("p", "o")  // the part-… files are sorted by `s`, `p` and `o`
+          Seq($"lang"),   // there is a lang=… sub-directory in `path` for each language
+          Seq($"s"),      // all rows for one subject is contained in a single part-… file
+          Seq($"p", $"o")  // the part-… files are sorted by `s`, `p` and `o`
         )
         .mode(SaveMode.Overwrite)
         .parquet(parquet)

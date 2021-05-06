@@ -24,7 +24,7 @@ Dgraph organizes the graph around predicates, so that dataset should contain pre
   most predicates have low frequency (and high selectivity)
 - predicates that, if they exist for a node:
   - have a single occurrence (single value)
-  - have a multiple occurrences (value list)
+  - have multiple occurrences (value list)
 - real-world predicate names in multiple languages
 - various data types and strings in multiple languages
 
@@ -175,7 +175,7 @@ Above example
 - downloads to `dbpedia/2016-10/core-i18n/{lang}/{dataset}_{lang}.ttl.bz2`
 - extracts to `dbpedia/2016-10/core-i18n/{lang}/{dataset}_{lang}.ttl`
 - loads into `dbpedia/2016-10/core-i18n/{dataset}.parquet`
-- processes to `dbpedia/2016-10/core-i18n/{dataset}.rdf`
+- pre-processes to `dbpedia/2016-10/core-i18n/{dataset}.rdf`
 - write schema to `dbpedia/2016-10/core-i18n/schema.dgraph` and `dbpedia/2016-10/core-i18n/schema.indexed.dgraph`
 
 Individual languages can be found in `dbpedia/2016-10/core-i18n/{dataset}.rdf/lang={language}`.
@@ -201,8 +201,9 @@ Load a subset of datasets and languages, defined via `langs` and `datasets`:
 Either use `schema.indexed.dgraph` with bulk loader to populate the indices during bulk loading,
 or bulk load with `schema.dgraph` and mutate the schema to `schema.indexed.dgraph` afterwards.
 
-<!-- Bulk.loading the full dataset takes 2 1/2 hours and requires 122 GB RAM and 106 GB disk space (v20.07.1 with schema.indexed.dgraph). -->
-Bulk.loading the full dataset takes 3 hours and requires 120 GB RAM and 65 GB disk space (v20.11.0-g1003e71bd with schema.indexed.dgraph).
+<!-- Bulk-loading the full dataset takes 2 1/2 hours and requires 122 GB RAM and 106 GB disk space (v20.07.1 with schema.indexed.dgraph). -->
+Bulk-loading the full dataset takes 3 hours and requires 120 GB RAM and 65 GB disk space (v20.11.0-g1003e71bd with schema.indexed.dgraph)
+and 2 1/2 hours with 85 GB RAM and 65 GB disk space (v21.03.0).
 
 ## Exploring the Graph
 

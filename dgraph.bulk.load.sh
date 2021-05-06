@@ -2,11 +2,6 @@
 
 shopt -s extglob
 
-# dgraph bulk may not write to /dgraph/tmp though we told it to, but /tmp
-rm -rf /tmp
-mkdir -p /dgraph/tmp
-ln -s /dgraph/tmp /tmp
-
 schema_file=/dgraph/schema.dgraph
 # data dir will be truncated
 data_dir=/dgraph/data
@@ -40,3 +35,4 @@ sleep 5
 echo "bulk loading"
 rm -rf /dgraph/out /dgraph/xidmap
 dgraph bulk --store_xids --xidmap /dgraph/xidmap -j 4 --ignore_errors --tmp /dgraph/tmp -f "$(join , $(ls $data_dir/*))" -s "$schema_file" --format=rdf --out=/dgraph/out --replace_out 2>&1 | tee /dgraph/bulk.log
+
